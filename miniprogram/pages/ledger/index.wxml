@@ -1,0 +1,86 @@
+<view class="page">
+  <view class="card">
+    <view class="section-title">选择日期</view>
+    <picker mode="date" value="{{date}}" bindchange="onDateChange">
+      <view class="picker">{{date}}</view>
+    </picker>
+  </view>
+
+  <view class="card">
+    <view class="section-title">快速记账</view>
+    <view class="field"><text class="label">销售总额</text><input class="input" value="{{ledger.salesTotal}}" data-field="salesTotal" bindinput="onLedgerInput" /></view>
+    <view class="field"><text class="label">实际收款额</text><input class="input" value="{{ledger.actualReceived}}" data-field="actualReceived" bindinput="onLedgerInput" /></view>
+    <view class="field"><text class="label">现金</text><input class="input" value="{{ledger.cashAmount}}" data-field="cashAmount" bindinput="onLedgerInput" /></view>
+    <view class="field"><text class="label">微信</text><input class="input" value="{{ledger.wechatAmount}}" data-field="wechatAmount" bindinput="onLedgerInput" /></view>
+    <view class="field"><text class="label">支付宝</text><input class="input" value="{{ledger.alipayAmount}}" data-field="alipayAmount" bindinput="onLedgerInput" /></view>
+    <view class="field"><text class="label">退款</text><input class="input" value="{{ledger.refundAmount}}" data-field="refundAmount" bindinput="onLedgerInput" /></view>
+    <view class="field"><text class="label">抹零</text><input class="input" value="{{ledger.roundingAmount}}" data-field="roundingAmount" bindinput="onLedgerInput" /></view>
+    <view class="field"><text class="label">备注</text><textarea class="textarea" value="{{ledger.note}}" data-field="note" bindinput="onLedgerInput"></textarea></view>
+    <view class="btn-row">
+      <button class="primary-btn" bindtap="saveLedger">保存日账</button>
+      <button class="ghost-btn" wx:if="{{user.role === 'owner'}}" bindtap="exportDaily">导出日报</button>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="section-title">添加单品销售</view>
+    <view class="field">
+      <text class="label">商品</text>
+      <picker range="{{products}}" range-key="name" bindchange="onProductPick">
+        <view class="picker">{{saleForm.productId ? '已选择商品' : '请选择商品'}}</view>
+      </picker>
+    </view>
+    <view class="field"><text class="label">数量/重量</text><input class="input" value="{{saleForm.quantity}}" data-field="quantity" bindinput="onSaleInput" /></view>
+    <view class="field"><text class="label">成交金额</text><input class="input" value="{{saleForm.amount}}" data-field="amount" bindinput="onSaleInput" /></view>
+    <view class="field"><text class="label">备注</text><input class="input" value="{{saleForm.note}}" data-field="note" bindinput="onSaleInput" /></view>
+    <button class="primary-btn" bindtap="addSale">添加单品记录</button>
+  </view>
+
+  <view class="card">
+    <view class="section-title">添加支出</view>
+    <view class="field">
+      <text class="label">支出类型</text>
+      <picker range="{{['进货支出','日常支出']}}" bindchange="onExpenseTypePick">
+        <view class="picker">{{expenseForm.expenseType === 'purchase' ? '进货支出' : '日常支出'}}</view>
+      </picker>
+    </view>
+    <view class="field"><text class="label">金额</text><input class="input" value="{{expenseForm.amount}}" data-field="amount" bindinput="onExpenseInput" /></view>
+    <view class="field"><text class="label">备注</text><input class="input" value="{{expenseForm.note}}" data-field="note" bindinput="onExpenseInput" /></view>
+    <button class="primary-btn" bindtap="addExpense">添加支出</button>
+  </view>
+
+  <view class="card">
+    <view class="section-title">单品销售记录</view>
+    <view wx:if="{{sales.length}}">
+      <view class="list-item" wx:for="{{sales}}" wx:key="id">
+        <view class="item-title">{{item.productName}} · ¥{{item.amount}}</view>
+        <view class="item-meta">数量/重量：{{item.quantity}} ｜ 备注：{{item.note || '无'}}</view>
+        <button class="warn-btn" size="mini" data-id="{{item.id}}" bindtap="deleteSale">删除</button>
+      </view>
+    </view>
+    <view class="empty" wx:else>当天还没有单品销售记录</view>
+  </view>
+
+  <view class="card">
+    <view class="section-title">支出记录</view>
+    <view wx:if="{{expenses.length}}">
+      <view class="list-item" wx:for="{{expenses}}" wx:key="id">
+        <view class="item-title">{{item.expenseType === 'purchase' ? '进货支出' : '日常支出'}} · ¥{{item.amount}}</view>
+        <view class="item-meta">{{item.note || '无备注'}}</view>
+        <button class="warn-btn" size="mini" data-id="{{item.id}}" bindtap="deleteExpense">删除</button>
+      </view>
+    </view>
+    <view class="empty" wx:else>当天还没有支出记录</view>
+  </view>
+
+  <view class="card" wx:if="{{user.role === 'owner'}}">
+    <view class="section-title">热销排行</view>
+    <view wx:if="{{topProducts.length}}">
+      <view class="list-item" wx:for="{{topProducts}}" wx:key="name">
+        <view class="item-title">{{item.name}} · ¥{{item.totalAmount}}</view>
+        <view class="item-meta">销量：{{item.totalQuantity}} {{item.unit}}</view>
+      </view>
+    </view>
+    <view class="empty" wx:else>当天暂无排行</view>
+  </view>
+</view>

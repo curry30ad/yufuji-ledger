@@ -1,0 +1,36 @@
+<view class="page">
+  <view class="card">
+    <view class="section-title">统计口径</view>
+    <view class="btn-row">
+      <button class="ghost-btn" data-metric="salesTotal" bindtap="switchMetric">销售总额</button>
+      <button class="ghost-btn" data-metric="actualReceived" bindtap="switchMetric">实际收款额</button>
+    </view>
+    <view class="btn-row" style="margin-top: 16rpx;">
+      <button class="ghost-btn" data-range="7" bindtap="switchRange">近7天</button>
+      <button class="ghost-btn" data-range="30" bindtap="switchRange">近30天</button>
+      <button class="ghost-btn" data-range="90" bindtap="switchRange">近90天</button>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{analytics}}">
+    <view class="section-title">日对比</view>
+    <view class="subtle">当前区间：¥{{analytics.daily.summary.currentTotal}}，上一周期：¥{{analytics.daily.summary.previousTotal}}</view>
+    <view class="bar-row" wx:for="{{analytics.daily.series}}" wx:key="label">
+      <view>{{item.label}} · ¥{{item.value}}</view>
+      <view class="bar-track">
+        <view class="bar-fill" style="width: {{(item.value / maxDaily) * 100}}%;"></view>
+      </view>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{analytics}}">
+    <view class="section-title">月对比</view>
+    <view class="subtle">本月：¥{{analytics.monthly.summary.currentTotal}}，上月：¥{{analytics.monthly.summary.previousTotal}}</view>
+    <view class="bar-row" wx:for="{{analytics.monthly.series}}" wx:key="label">
+      <view>{{item.label}} · ¥{{item.value}}</view>
+      <view class="bar-track">
+        <view class="bar-fill" style="width: {{(item.value / maxMonthly) * 100}}%;"></view>
+      </view>
+    </view>
+  </view>
+</view>

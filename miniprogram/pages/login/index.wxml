@@ -1,0 +1,15 @@
+<view class="page">
+  <view class="card" style="margin-top: 120rpx;">
+    <view class="title">于福记熟食店记账</view>
+    <view class="subtle">微信小程序版登录</view>
+    <view class="field">
+      <text class="label">账号</text>
+      <input class="input" value="{{username}}" data-field="username" bindinput="onInput" placeholder="请输入账号" />
+    </view>
+    <view class="field">
+      <text class="label">密码</text>
+      <input class="input" password value="{{password}}" data-field="password" bindinput="onInput" placeholder="请输入密码" />
+    </view>
+    <button class="primary-btn" loading="{{loading}}" bindtap="submit">登录</button>
+  </view>
+</view>

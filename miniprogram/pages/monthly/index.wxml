@@ -1,0 +1,43 @@
+<view class="page">
+  <view class="card">
+    <view class="section-title">选择月份</view>
+    <picker mode="date" fields="month" value="{{month}}" bindchange="onMonthChange">
+      <view class="picker">{{month}}</view>
+    </picker>
+  </view>
+
+  <view class="card" wx:if="{{summary}}">
+    <view class="section-title">月度汇总</view>
+    <view class="grid">
+      <view class="stat"><view class="stat-label">销售总额</view><view class="stat-value">¥{{summary.totals.salesTotal}}</view></view>
+      <view class="stat"><view class="stat-label">实际收款额</view><view class="stat-value">¥{{summary.totals.actualReceived}}</view></view>
+      <view class="stat"><view class="stat-label">总支出</view><view class="stat-value">¥{{summary.totals.expenseTotal}}</view></view>
+      <view class="stat"><view class="stat-label">简版利润</view><view class="stat-value">¥{{summary.totals.profit}}</view></view>
+    </view>
+    <view class="btn-row" style="margin-top: 16rpx;">
+      <button class="primary-btn" bindtap="exportMonthly">导出月报</button>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{summary}}">
+    <view class="section-title">每日销售汇总</view>
+    <view wx:if="{{summary.days.length}}">
+      <view class="list-item" wx:for="{{summary.days}}" wx:key="date">
+        <view class="item-title">{{item.date}} · ¥{{item.salesTotal}}</view>
+        <view class="item-meta">实收：¥{{item.actualReceived}} ｜ 支出：¥{{item.expenseTotal}} ｜ 利润：¥{{item.profit}}</view>
+      </view>
+    </view>
+    <view class="empty" wx:else>当前月份暂无数据</view>
+  </view>
+
+  <view class="card" wx:if="{{summary}}">
+    <view class="section-title">单品月汇总</view>
+    <view wx:if="{{summary.productSummary.length}}">
+      <view class="list-item" wx:for="{{summary.productSummary}}" wx:key="name">
+        <view class="item-title">{{item.name}} · ¥{{item.totalAmount}}</view>
+        <view class="item-meta">销量：{{item.totalQuantity}} {{item.unit}}</view>
+      </view>
+    </view>
+    <view class="empty" wx:else>本月暂无单品销量</view>
+  </view>
+</view>

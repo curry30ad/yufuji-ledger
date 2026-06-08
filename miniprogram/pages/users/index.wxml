@@ -1,0 +1,34 @@
+<view class="page">
+  <view class="card">
+    <view class="section-title">{{form.id ? '编辑店员' : '新增店员'}}</view>
+    <view class="field"><text class="label">姓名</text><input class="input" value="{{form.name}}" data-field="name" bindinput="onInput" /></view>
+    <view class="field"><text class="label">账号</text><input class="input" value="{{form.username}}" data-field="username" bindinput="onInput" /></view>
+    <view class="field"><text class="label">{{form.id ? '新密码（留空则不改）' : '密码'}}</text><input class="input" value="{{form.password}}" data-field="password" bindinput="onInput" /></view>
+    <view class="field">
+      <text class="label">状态</text>
+      <picker range="{{['启用','停用']}}" bindchange="onStatusPick">
+        <view class="picker">{{form.status === 'active' ? '启用' : '停用'}}</view>
+      </picker>
+    </view>
+    <view class="btn-row">
+      <button class="primary-btn" bindtap="saveItem">保存店员</button>
+      <button class="ghost-btn" bindtap="resetForm">清空表单</button>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="section-title">店员列表</view>
+    <view wx:if="{{items.length}}">
+      <view class="list-item" wx:for="{{items}}" wx:key="id">
+        <view class="item-title">{{item.name}} · {{item.username}}</view>
+        <view class="item-meta">{{item.status === 'active' ? '启用中' : '已停用'}}</view>
+        <view class="btn-row" style="margin-top: 12rpx;">
+          <button class="ghost-btn" size="mini" data-id="{{item.id}}" bindtap="editItem">编辑</button>
+          <button class="ghost-btn" size="mini" data-id="{{item.id}}" bindtap="resetPassword">重置密码</button>
+          <button class="warn-btn" size="mini" data-id="{{item.id}}" bindtap="deleteItem">删除</button>
+        </view>
+      </view>
+    </view>
+    <view class="empty" wx:else>还没有店员</view>
+  </view>
+</view>

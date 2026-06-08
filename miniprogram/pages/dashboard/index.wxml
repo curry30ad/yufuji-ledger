@@ -1,0 +1,78 @@
+<view class="page">
+  <view class="card">
+    <view class="title">欢迎回来</view>
+    <view>{{user.name}} · {{user.role === 'owner' ? '店主' : '店员'}}</view>
+    <view class="subtle">今日日期：{{today}}</view>
+  </view>
+
+  <view class="card" wx:if="{{ledger}}">
+    <view class="section-title">今日经营</view>
+    <view class="grid">
+      <view class="stat">
+        <view class="stat-label">销售总额</view>
+        <view class="stat-value">¥{{ledger.salesTotal}}</view>
+      </view>
+      <view class="stat">
+        <view class="stat-label">实际收款</view>
+        <view class="stat-value">¥{{ledger.actualReceived}}</view>
+      </view>
+      <view class="stat">
+        <view class="stat-label">当日支出</view>
+        <view class="stat-value">¥{{ledger.expenseTotal}}</view>
+      </view>
+      <view class="stat" wx:if="{{user.role === 'owner'}}">
+        <view class="stat-label">简版利润</view>
+        <view class="stat-value">¥{{ledger.profit}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{analytics}}">
+    <view class="section-title">经营对比</view>
+    <view class="grid">
+      <view class="stat">
+        <view class="stat-label">近30天销售</view>
+        <view class="stat-value">¥{{analytics.daily.summary.currentTotal}}</view>
+      </view>
+      <view class="stat">
+        <view class="stat-label">上个30天</view>
+        <view class="stat-value">¥{{analytics.daily.summary.previousTotal}}</view>
+      </view>
+      <view class="stat">
+        <view class="stat-label">本月销售</view>
+        <view class="stat-value">¥{{analytics.monthly.summary.currentTotal}}</view>
+      </view>
+      <view class="stat">
+        <view class="stat-label">上月销售</view>
+        <view class="stat-value">¥{{analytics.monthly.summary.previousTotal}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="nav-grid">
+    <view class="nav-btn" data-url="/pages/ledger/index" bindtap="goPage">
+      <view class="nav-title">日记账</view>
+      <view class="nav-desc">记营业额、单品和支出</view>
+    </view>
+    <view class="nav-btn" wx:if="{{user.role === 'owner'}}" data-url="/pages/monthly/index" bindtap="goPage">
+      <view class="nav-title">月报</view>
+      <view class="nav-desc">查看月度汇总并导出</view>
+    </view>
+    <view class="nav-btn" wx:if="{{user.role === 'owner'}}" data-url="/pages/analytics/index" bindtap="goPage">
+      <view class="nav-title">经营分析</view>
+      <view class="nav-desc">看日对比和月对比</view>
+    </view>
+    <view class="nav-btn" wx:if="{{user.role === 'owner'}}" data-url="/pages/products/index" bindtap="goPage">
+      <view class="nav-title">商品管理</view>
+      <view class="nav-desc">新增、编辑、停用商品</view>
+    </view>
+    <view class="nav-btn" wx:if="{{user.role === 'owner'}}" data-url="/pages/users/index" bindtap="goPage">
+      <view class="nav-title">店员管理</view>
+      <view class="nav-desc">新增店员和重置密码</view>
+    </view>
+  </view>
+
+  <view class="card">
+    <button class="ghost-btn" bindtap="logout">退出登录</button>
+  </view>
+</view>

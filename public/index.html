@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>于福记熟食店记账系统</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app">
+    <section id="loginView" class="login-shell">
+      <div class="login-card">
+        <p class="eyebrow">于福记熟食店记账网页应用</p>
+        <h1>电脑和手机都能记账</h1>
+        <p class="muted">支持日营业额、单品销售、支出、日报月报与 Excel 导出。</p>
+        <form id="loginForm" class="stack">
+          <label>
+            <span>账号</span>
+            <input name="username" placeholder="owner 或 staff" required>
+          </label>
+          <label>
+            <span>密码</span>
+            <input name="password" type="password" placeholder="请输入密码" required>
+          </label>
+          <button type="submit" class="primary">登录系统</button>
+        </form>
+        <div class="tip-box">
+          <div>店主账号：<strong>owner / admin123</strong></div>
+          <div>店员账号：<strong>staff / staff123</strong></div>
+        </div>
+        <p id="loginError" class="error-text"></p>
+      </div>
+    </section>
+
+    <section id="dashboardView" class="hidden">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">于福记熟食店记账系统</p>
+          <h2 id="welcomeText">经营总览</h2>
+        </div>
+        <div class="topbar-actions">
+          <button id="logoutBtn" class="ghost">退出</button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <aside class="sidebar">
+          <button class="nav-btn owner-only" data-section="overviewSection">经营总览</button>
+          <button class="nav-btn active" data-section="ledgerSection">快速记账</button>
+          <button class="nav-btn" data-section="salesSection">单品销售</button>
+          <button class="nav-btn" data-section="expensesSection">支出记录</button>
+          <button class="nav-btn owner-only" data-section="reportsSection">日报月报</button>
+          <button class="nav-btn owner-only" data-section="analyticsSection">经营分析</button>
+          <button class="nav-btn owner-only" data-section="productsSection">商品管理</button>
+          <button class="nav-btn owner-only" data-section="usersSection">账号管理</button>
+        </aside>
+
+        <section class="content">
+          <div class="toolbar">
+            <label>
+              <span>工作日期</span>
+              <input id="activeDate" type="date">
+            </label>
+            <label class="owner-only">
+              <span>月份</span>
+              <input id="activeMonth" type="month">
+            </label>
+            <button id="refreshBtn" class="ghost">刷新数据</button>
+          </div>
+
+          <section id="overviewSection" class="page-section hidden owner-only">
+            <div class="card-grid" id="overviewCards"></div>
+            <div class="double-grid">
+              <article class="panel">
+                <div class="panel-head">
+                  <h3>今日热销单品</h3>
+                </div>
+                <div id="topProductsTable"></div>
+              </article>
+              <article class="panel">
+                <div class="panel-head">
+                  <h3>今日支出概览</h3>
+                </div>
+                <div id="expenseSnapshot"></div>
+              </article>
+            </div>
+          </section>
+
+          <section id="ledgerSection" class="page-section">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>快速记当天营业</h3>
+              </div>
+              <form id="ledgerForm" class="form-grid">
+                <label><span>销售总额</span><input name="salesTotal" type="number" step="0.01" required></label>
+                <label><span>实际收款</span><input name="actualReceived" type="number" step="0.01" required></label>
+                <label><span>现金</span><input name="cashAmount" type="number" step="0.01" required></label>
+                <label><span>微信</span><input name="wechatAmount" type="number" step="0.01" required></label>
+                <label><span>支付宝</span><input name="alipayAmount" type="number" step="0.01" required></label>
+                <label><span>退款</span><input name="refundAmount" type="number" step="0.01" required></label>
+                <label><span>抹零</span><input name="roundingAmount" type="number" step="0.01" required></label>
+                <label class="full"><span>备注</span><textarea name="note" rows="3" placeholder="例如：午市活动、团购订单"></textarea></label>
+                <div class="full form-actions">
+                  <button type="submit" class="primary">保存营业数据</button>
+                </div>
+              </form>
+            </article>
+          </section>
+
+          <section id="salesSection" class="page-section hidden">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>录入单品销售</h3>
+              </div>
+              <form id="saleForm" class="form-grid">
+                <input name="id" type="hidden">
+                <label>
+                  <span>商品</span>
+                  <select name="productId" required></select>
+                </label>
+                <label>
+                  <span>数量 / 重量</span>
+                  <input name="quantity" type="number" step="0.01" required>
+                </label>
+                <label>
+                  <span>成交金额</span>
+                  <input name="amount" type="number" step="0.01" required>
+                </label>
+                <label class="full">
+                  <span>备注</span>
+                  <input name="note" placeholder="可留空">
+                </label>
+                <div class="full form-actions">
+                  <button type="submit" class="primary">保存销售明细</button>
+                  <button type="button" id="resetSaleBtn" class="ghost">取消编辑</button>
+                </div>
+              </form>
+            </article>
+            <article class="panel">
+              <div class="panel-head">
+                <h3>当天销售明细</h3>
+              </div>
+              <div id="salesTable"></div>
+            </article>
+          </section>
+
+          <section id="expensesSection" class="page-section hidden">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>记录支出</h3>
+              </div>
+              <form id="expenseForm" class="form-grid">
+                <input name="id" type="hidden">
+                <label>
+                  <span>支出类型</span>
+                  <select name="expenseType" required>
+                    <option value="purchase">进货支出</option>
+                    <option value="daily">日常支出</option>
+                  </select>
+                </label>
+                <label>
+                  <span>金额</span>
+                  <input name="amount" type="number" step="0.01" required>
+                </label>
+                <label class="full">
+                  <span>备注</span>
+                  <input name="note" placeholder="例如：晚市补货、塑料袋">
+                </label>
+                <div class="full form-actions">
+                  <button type="submit" class="primary">保存支出</button>
+                  <button type="button" id="resetExpenseBtn" class="ghost">取消编辑</button>
+                </div>
+              </form>
+            </article>
+            <article class="panel">
+              <div class="panel-head">
+                <h3>当天支出明细</h3>
+              </div>
+              <div id="expensesTable"></div>
+            </article>
+          </section>
+
+          <section id="reportsSection" class="page-section hidden owner-only">
+            <div class="double-grid">
+              <article class="panel">
+                <div class="panel-head">
+                  <h3>日报</h3>
+                  <button id="exportDailyBtn" class="ghost">导出日报 Excel</button>
+                </div>
+                <div id="dailyReport"></div>
+              </article>
+              <article class="panel">
+                <div class="panel-head">
+                  <h3>月报</h3>
+                  <button id="exportMonthlyBtn" class="ghost">导出月报 Excel</button>
+                </div>
+                <div id="monthlyReport"></div>
+              </article>
+            </div>
+          </section>
+
+          <section id="analyticsSection" class="page-section hidden owner-only">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>经营分析</h3>
+              </div>
+              <div class="analytics-toolbar">
+                <div class="toggle-group">
+                  <span class="toggle-label">金额口径</span>
+                  <button class="ghost analytics-toggle active" data-analytics-metric="salesTotal">销售总额</button>
+                  <button class="ghost analytics-toggle" data-analytics-metric="actualReceived">实际收款额</button>
+                </div>
+                <div class="toggle-group">
+                  <span class="toggle-label">日对比范围</span>
+                  <button class="ghost analytics-range active" data-analytics-range="7">7天</button>
+                  <button class="ghost analytics-range" data-analytics-range="30">30天</button>
+                  <button class="ghost analytics-range" data-analytics-range="90">90天</button>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>日与日销售额对比</h3>
+              </div>
+              <div class="card-grid" id="analyticsDailyCards"></div>
+              <div id="analyticsDailyChart"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>月与月销售额对比</h3>
+              </div>
+              <div class="card-grid" id="analyticsMonthlyCards"></div>
+              <div id="analyticsMonthlyChart"></div>
+            </article>
+          </section>
+
+          <section id="productsSection" class="page-section hidden owner-only">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>商品管理</h3>
+              </div>
+              <form id="productForm" class="form-grid">
+                <input name="id" type="hidden">
+                <label><span>商品名称</span><input name="name" required></label>
+                <label>
+                  <span>售卖方式</span>
+                  <select name="saleMode">
+                    <option value="piece">按份 / 个</option>
+                    <option value="weight">按重量</option>
+                  </select>
+                </label>
+                <label><span>单位</span><input name="unit" required></label>
+                <label><span>默认单价</span><input name="price" type="number" step="0.01" required></label>
+                <label><span>排序</span><input name="sortOrder" type="number" step="1" value="0"></label>
+                <label class="checkbox-row"><input name="isActive" type="checkbox" checked><span>启用商品</span></label>
+                <div class="full form-actions">
+                  <button type="submit" class="primary">保存商品</button>
+                  <button type="button" id="resetProductBtn" class="ghost">清空表单</button>
+                </div>
+              </form>
+            </article>
+            <article class="panel">
+              <div class="panel-head">
+                <h3>商品列表</h3>
+              </div>
+              <div id="productsTable"></div>
+            </article>
+          </section>
+
+          <section id="usersSection" class="page-section hidden owner-only">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>新增 / 编辑店员</h3>
+              </div>
+              <form id="userForm" class="form-grid">
+                <input name="id" type="hidden">
+                <label><span>姓名</span><input name="name" required></label>
+                <label><span>登录账号</span><input name="username" required autocomplete="username"></label>
+                <label><span>登录密码</span><input name="password" type="password" autocomplete="new-password" placeholder="新增时必填，编辑时留空表示不改"></label>
+                <label>
+                  <span>状态</span>
+                  <select name="status">
+                    <option value="active">启用</option>
+                    <option value="inactive">停用</option>
+                  </select>
+                </label>
+                <div class="full form-actions">
+                  <button type="submit" class="primary">保存店员</button>
+                  <button type="button" id="resetUserBtn" class="ghost">清空表单</button>
+                </div>
+              </form>
+            </article>
+            <article class="panel">
+              <div class="panel-head">
+                <h3>账号列表</h3>
+              </div>
+              <div id="usersTable"></div>
+            </article>
+          </section>
+        </section>
+      </main>
+    </section>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: yufuji-ledger
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /health
+    disk:
+      name: ledger-data
+      mountPath: /var/data/yufuji-ledger
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: DATA_DIR
+        value: /var/data/yufuji-ledger

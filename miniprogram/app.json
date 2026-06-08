@@ -1,0 +1,20 @@
+{
+  "pages": [
+    "pages/login/index",
+    "pages/dashboard/index",
+    "pages/ledger/index",
+    "pages/monthly/index",
+    "pages/analytics/index",
+    "pages/products/index",
+    "pages/users/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "于福记熟食店",
+    "navigationBarBackgroundColor": "#8b1e1e",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f7f2eb",
+    "backgroundTextStyle": "dark"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}
