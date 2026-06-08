@@ -5,6 +5,8 @@
 - 响应式网页端
 - 微信小程序端
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/curry30ad/yufuji-ledger)
+
 后端使用 Node.js + Express，数据默认保存在本地 SQLite 文件中。
 
 ## 当前功能
