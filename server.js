@@ -19,8 +19,14 @@ const TESSDATA_DIR = path.join(DATA_DIR, "tessdata");
 const RECEIPT_LEXICON_PATH = path.join(__dirname, "receipt-lexicon.json");
 const PORT = Number(process.env.PORT || 3000);
 const sessionStore = new Map();
-const DEFAULT_STORE_NAME = "é»è®¤é¨åº";
-const STORE_NAME = "äºç¦è®°çé£åº";
+const DEFAULT_STORE_NAME = "\u4e8e\u798f\u8bb0\u719f\u98df\u5e97";
+const STORE_NAME = "\u4e8e\u798f\u8bb0\u719f\u98df\u5e97";
+const OWNER_DISPLAY_NAME = "\u4e8e\u798f\u8bb0";
+const LEGACY_STORE_NAME_MAPPINGS = [
+  { from: "é»è®¤é¨åº", to: DEFAULT_STORE_NAME },
+  { from: "????", to: DEFAULT_STORE_NAME },
+  { from: "??1", to: "store1" }
+];
 const DEFAULT_RECEIPT_LEXICON = {
   ignoreLineKeywords: [],
   fieldPrefixes: [],
@@ -39,8 +45,16 @@ function todayText() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function normalizeLegacyStoreName(value) {
+  const rawText = String(value || "").trim();
+  const matched = LEGACY_STORE_NAME_MAPPINGS.find(function findMapping(item) {
+    return item.from === rawText;
+  });
+  return matched ? matched.to : rawText;
+}
+
 function normalizeStoreName(value) {
-  const text = String(value || "").trim();
+  const text = normalizeLegacyStoreName(value);
   return text || DEFAULT_STORE_NAME;
 }
 
@@ -384,6 +398,38 @@ function ensureDailyLedgerCompositeKey(api) {
   api.raw.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_ledgers_date_store ON daily_ledgers(ledger_date, store_name)");
 }
 
+function mergeLegacyDailyLedgerStore(api, fromStoreName, toStoreName) {
+  const sourceRows = api.all("SELECT * FROM daily_ledgers WHERE store_name = ? ORDER BY ledger_date ASC, id ASC", [fromStoreName]);
+  sourceRows.forEach(function mergeRow(sourceRow) {
+    const targetRow = api.one("SELECT * FROM daily_ledgers WHERE ledger_date = ? AND store_name = ?", [sourceRow.ledger_date, toStoreName]);
+    if (!targetRow) {
+      api.run("UPDATE daily_ledgers SET store_name = ? WHERE id = ?", [toStoreName, sourceRow.id]);
+      return;
+    }
+
+    const mergedNote = [String(targetRow.note || "").trim(), String(sourceRow.note || "").trim()]
+      .filter(Boolean)
+      .join(" | ");
+
+    api.run(
+      "UPDATE daily_ledgers SET sales_total = ?, actual_received = ?, cash_amount = ?, wechat_amount = ?, alipay_amount = ?, refund_amount = ?, rounding_amount = ?, note = ?, updated_at = ? WHERE id = ?",
+      [
+        money(targetRow.sales_total) + money(sourceRow.sales_total),
+        money(targetRow.actual_received) + money(sourceRow.actual_received),
+        money(targetRow.cash_amount) + money(sourceRow.cash_amount),
+        money(targetRow.wechat_amount) + money(sourceRow.wechat_amount),
+        money(targetRow.alipay_amount) + money(sourceRow.alipay_amount),
+        money(targetRow.refund_amount) + money(sourceRow.refund_amount),
+        money(targetRow.rounding_amount) + money(sourceRow.rounding_amount),
+        mergedNote,
+        new Date().toISOString(),
+        targetRow.id
+      ]
+    );
+    api.run("DELETE FROM daily_ledgers WHERE id = ?", [sourceRow.id]);
+  });
+}
+
 function migrateSchema(api) {
   ensureColumn(api, "users", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "products", "keywords TEXT NOT NULL DEFAULT ''");
@@ -401,6 +447,14 @@ function migrateSchema(api) {
   api.run("UPDATE expense_entries SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
   api.run("UPDATE purchase_entries SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
   api.run("UPDATE daily_ledgers SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
+  LEGACY_STORE_NAME_MAPPINGS.forEach(function applyLegacyStoreMapping(item) {
+    api.run("UPDATE users SET store_name = ? WHERE store_name = ?", [item.to, item.from]);
+    mergeLegacyDailyLedgerStore(api, item.from, item.to);
+    api.run("UPDATE sale_entries SET store_name = ? WHERE store_name = ?", [item.to, item.from]);
+    api.run("UPDATE expense_entries SET store_name = ? WHERE store_name = ?", [item.to, item.from]);
+    api.run("UPDATE purchase_entries SET store_name = ? WHERE store_name = ?", [item.to, item.from]);
+  });
+  api.run("UPDATE users SET name = ?, store_name = ? WHERE username = 'owner'", [OWNER_DISPLAY_NAME, DEFAULT_STORE_NAME]);
 }
 
 function persistNow(api) {
@@ -421,7 +475,7 @@ function seedDatabase(api) {
   const store2Hash = bcrypt.hashSync("123456", 10);
   api.run(
     "INSERT INTO users (username, password_hash, name, store_name, role, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?)",
-    ["owner", ownerHash, "管理员", DEFAULT_STORE_NAME, "owner", now]
+    ["owner", ownerHash, OWNER_DISPLAY_NAME, DEFAULT_STORE_NAME, "owner", now]
   );
   api.run(
     "INSERT INTO users (username, password_hash, name, store_name, role, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?)",
