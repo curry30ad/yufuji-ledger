@@ -351,6 +351,15 @@ th {
   background: #fff;
 }
 
+.receipt-recommend-btn {
+  margin: 2px 6px 2px 0;
+}
+
+.subtle-inline {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .receipt-pre {
   white-space: pre-wrap;
   background: rgba(173, 59, 31, 0.05);

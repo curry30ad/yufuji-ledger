@@ -11,12 +11,12 @@
     <section id="loginView" class="login-shell">
       <div class="login-card">
         <p class="eyebrow">于福记熟食店记账网页应用</p>
-        <h1>电脑和手机都能记账</h1>
-        <p class="muted">支持日营业额、单品销售、支出、日报月报与 Excel 导出。</p>
+        <h1>电脑和手机都能操作</h1>
+        <p class="muted">支持营业额、单品销售、进货、支出、日报月报与 Excel 导出。</p>
         <form id="loginForm" class="stack">
           <label>
             <span>账号</span>
-            <input name="username" placeholder="owner 或 staff" required>
+            <input name="username" placeholder="owner 或店员账号" required>
           </label>
           <label>
             <span>密码</span>
@@ -25,8 +25,8 @@
           <button type="submit" class="primary">登录系统</button>
         </form>
         <div class="tip-box">
-          <div>店主账号：<strong>owner / admin123</strong></div>
-          <div>店员账号：<strong>staff / staff123</strong></div>
+          <div>管理员账号：<strong>owner / admin123</strong></div>
+          <div>示例店员账号：<strong>store1 / 123456</strong></div>
         </div>
         <p id="loginError" class="error-text"></p>
       </div>
@@ -48,6 +48,7 @@
           <button class="nav-btn owner-only" data-section="overviewSection">经营总览</button>
           <button class="nav-btn active" data-section="ledgerSection">快速记账</button>
           <button class="nav-btn" data-section="salesSection">单品销售</button>
+          <button class="nav-btn" data-section="purchasesSection">进货记账</button>
           <button class="nav-btn" data-section="expensesSection">支出记录</button>
           <button class="nav-btn owner-only" data-section="reportsSection">日报月报</button>
           <button class="nav-btn owner-only" data-section="analyticsSection">经营分析</button>
@@ -65,10 +66,10 @@
               <span>月份</span>
               <input id="activeMonth" type="month">
             </label>
-                        <label class="owner-only">
-              <span>Store</span>
+            <label class="owner-only">
+              <span>门店</span>
               <select id="ownerStoreFilter">
-                <option value="all">All Stores</option>
+                <option value="all">全部门店</option>
               </select>
             </label>
             <button id="refreshBtn" class="ghost">刷新数据</button>
@@ -161,6 +162,34 @@
             </article>
           </section>
 
+          <section id="purchasesSection" class="page-section hidden">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>记录进货</h3>
+              </div>
+              <form id="purchaseForm" class="form-grid">
+                <input name="id" type="hidden">
+                <label><span>进货商品</span><input name="productName" required></label>
+                <label><span>数量</span><input name="quantity" type="number" step="0.01" required></label>
+                <label><span>单位</span><input name="unit" placeholder="斤 / 个 / 箱"></label>
+                <label><span>进货单价</span><input name="unitCost" type="number" step="0.01" required></label>
+                <label><span>进货总额</span><input name="totalCost" type="number" step="0.01" placeholder="留空则自动计算"></label>
+                <label><span>供应商</span><input name="supplier" placeholder="可留空"></label>
+                <label class="full"><span>备注</span><input name="note" placeholder="例如：早市补货、整箱采购"></label>
+                <div class="full form-actions">
+                  <button type="submit" class="primary">保存进货记录</button>
+                  <button type="button" id="resetPurchaseBtn" class="ghost">取消编辑</button>
+                </div>
+              </form>
+            </article>
+            <article class="panel">
+              <div class="panel-head">
+                <h3>当天进货明细</h3>
+              </div>
+              <div id="purchasesTable"></div>
+            </article>
+          </section>
+
           <section id="expensesSection" class="page-section hidden">
             <article class="panel">
               <div class="panel-head">
@@ -181,7 +210,7 @@
                 </label>
                 <label class="full">
                   <span>备注</span>
-                  <input name="note" placeholder="例如：晚市补货、塑料袋">
+                  <input name="note" placeholder="例如：塑料袋、临时运输费">
                 </label>
                 <div class="full form-actions">
                   <button type="submit" class="primary">保存支出</button>
@@ -214,6 +243,12 @@
                 <div id="monthlyReport"></div>
               </article>
             </div>
+            <article class="panel">
+              <div class="panel-head">
+                <h3>门店经营情况</h3>
+              </div>
+              <div id="storeSalesSummary"></div>
+            </article>
           </section>
 
           <section id="analyticsSection" class="page-section hidden owner-only">
@@ -262,12 +297,13 @@
                 <input name="id" type="hidden">
                 <label><span>商品名称</span><input name="name" required></label>
                 <label>
-                  <span>售卖方式</span>
+                  <span>销售方式</span>
                   <select name="saleMode">
                     <option value="piece">按份 / 个</option>
                     <option value="weight">按重量</option>
                   </select>
                 </label>
+                <label class="full"><span>别名 / 关键词</span><input name="keywords" placeholder="例如：鸭脖, 招牌鸭脖, 香辣鸭脖"></label>
                 <label><span>单位</span><input name="unit" required></label>
                 <label><span>默认单价</span><input name="price" type="number" step="0.01" required></label>
                 <label><span>排序</span><input name="sortOrder" type="number" step="1" value="0"></label>
@@ -295,8 +331,8 @@
                 <input name="id" type="hidden">
                 <label><span>姓名</span><input name="name" required></label>
                 <label><span>登录账号</span><input name="username" required autocomplete="username"></label>
-                <label><span>Store</span><input name="storeName" required placeholder="e.g. Store 1"></label>
-                <label><span>登录密码</span><input name="password" type="password" autocomplete="new-password" placeholder="新增时必填，编辑时留空表示不改"></label>
+                <label><span>门店</span><input name="storeName" required placeholder="例如：门店1"></label>
+                <label><span>登录密码</span><input name="password" type="password" autocomplete="new-password" placeholder="新增时必填，编辑时留空表示不修改"></label>
                 <label>
                   <span>状态</span>
                   <select name="status">

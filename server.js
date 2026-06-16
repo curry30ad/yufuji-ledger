@@ -159,6 +159,15 @@ function containsReceiptFoodKeyword(line) {
   });
 }
 
+function parseProductKeywords(value) {
+  return String(value || "")
+    .split(/[\n,，;；、|]/)
+    .map(function mapKeyword(item) {
+      return String(item || "").trim();
+    })
+    .filter(Boolean);
+}
+
 function splitReceiptLines(text) {
   return String(text || "")
     .split(/\r?\n/)
@@ -222,6 +231,7 @@ function createSchema(api) {
     CREATE TABLE IF NOT EXISTS products (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      keywords TEXT NOT NULL DEFAULT '',
       sale_mode TEXT NOT NULL,
       unit TEXT NOT NULL,
       price REAL NOT NULL,
@@ -269,6 +279,22 @@ function createSchema(api) {
       store_name TEXT NOT NULL DEFAULT '${DEFAULT_STORE_NAME}',
       expense_type TEXT NOT NULL,
       amount REAL NOT NULL DEFAULT 0,
+      note TEXT NOT NULL DEFAULT '',
+      created_by INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS purchase_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      purchase_date TEXT NOT NULL,
+      store_name TEXT NOT NULL DEFAULT '${DEFAULT_STORE_NAME}',
+      product_name TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 0,
+      unit TEXT NOT NULL DEFAULT '',
+      unit_cost REAL NOT NULL DEFAULT 0,
+      total_cost REAL NOT NULL DEFAULT 0,
+      supplier TEXT NOT NULL DEFAULT '',
       note TEXT NOT NULL DEFAULT '',
       created_by INTEGER,
       created_at TEXT NOT NULL,
@@ -360,15 +386,20 @@ function ensureDailyLedgerCompositeKey(api) {
 
 function migrateSchema(api) {
   ensureColumn(api, "users", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
+  ensureColumn(api, "products", "keywords TEXT NOT NULL DEFAULT ''");
   ensureColumn(api, "sale_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "expense_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
+  ensureColumn(api, "purchase_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
+  ensureColumn(api, "purchase_entries", "supplier TEXT NOT NULL DEFAULT ''");
   ensureDailyLedgerCompositeKey(api);
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_sale_entries_date_store ON sale_entries(sale_date, store_name)");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_expense_entries_date_store ON expense_entries(expense_date, store_name)");
+  api.raw.exec("CREATE INDEX IF NOT EXISTS idx_purchase_entries_date_store ON purchase_entries(purchase_date, store_name)");
 
   api.run("UPDATE users SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
   api.run("UPDATE sale_entries SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
   api.run("UPDATE expense_entries SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
+  api.run("UPDATE purchase_entries SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
   api.run("UPDATE daily_ledgers SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
 }
 
@@ -455,6 +486,8 @@ function getAvailableStores(api) {
     SELECT store_name FROM sale_entries
     UNION
     SELECT store_name FROM expense_entries
+    UNION
+    SELECT store_name FROM purchase_entries
   `);
   const values = rows.map(function mapStore(row) {
     return normalizeStoreName(row.store_name);
@@ -533,51 +566,99 @@ function getTopProducts(api, fromDate, toDate, limit, storeName) {
 
 function getActiveProducts(api) {
   return api.all(
-    "SELECT id, name, sale_mode, unit, price FROM products WHERE is_active = 1 ORDER BY sort_order ASC, id ASC"
+    "SELECT id, name, keywords, sale_mode, unit, price FROM products WHERE is_active = 1 ORDER BY sort_order ASC, id ASC"
   ).map(function mapProduct(row) {
     const normalizedName = normalizeMatchText(row.name);
+    const aliasKeywords = parseProductKeywords(row.keywords);
+    const aliasTokens = aliasKeywords.map(function mapAlias(keyword) {
+      return {
+        text: keyword,
+        normalized: normalizeMatchText(keyword),
+        tokens: tokenizeMatchText(keyword)
+      };
+    }).filter(function filterAlias(item) {
+      return item.normalized;
+    });
     return {
       id: row.id,
       name: row.name,
+      keywords: row.keywords || "",
       saleMode: row.sale_mode,
       unit: row.unit,
       price: money(row.price),
       normalizedName: normalizedName,
-      tokens: tokenizeMatchText(row.name)
+      tokens: tokenizeMatchText(row.name),
+      aliasTokens: aliasTokens
     };
   });
 }
 
-function findBestReceiptProduct(line, products) {
+function getReceiptProductScore(line, product) {
   const normalizedLine = normalizeMatchText(line);
   const lineTokens = tokenizeMatchText(line);
-  let best = null;
-  products.forEach(function tryProduct(product) {
-    if (!product.normalizedName) {
-      return;
+  if (!product || !product.normalizedName) {
+    return 0;
+  }
+
+  function scoreAgainst(normalizedTarget, targetTokens) {
+    if (!normalizedTarget) {
+      return 0;
     }
-    let score = 0;
-    if (normalizedLine.includes(product.normalizedName)) {
-      score = 100 + product.normalizedName.length;
-    } else {
-      const tokenMatches = product.tokens.filter(function (token) {
-        return lineTokens.includes(token);
-      }).length;
-      const tokenRatio = product.tokens.length ? tokenMatches / product.tokens.length : 0;
-      const overlapChars = product.normalizedName.split("").filter(function (char) {
-        return normalizedLine.includes(char);
-      }).length;
-      const charRatio = overlapChars / product.normalizedName.length;
-      const ratio = Math.max(tokenRatio, charRatio);
-      if (product.normalizedName.length >= 2 && ratio >= 0.55) {
-        score = Math.round(ratio * 90);
-      }
+    if (normalizedLine.includes(normalizedTarget)) {
+      return 100 + normalizedTarget.length;
     }
-    if (!best || score > best.score) {
-      best = { product: product, score: score };
+
+    const tokenMatches = targetTokens.filter(function (token) {
+      return lineTokens.includes(token);
+    }).length;
+    const tokenRatio = targetTokens.length ? tokenMatches / targetTokens.length : 0;
+    const overlapChars = normalizedTarget.split("").filter(function (char) {
+      return normalizedLine.includes(char);
+    }).length;
+    const charRatio = overlapChars / normalizedTarget.length;
+    const ratio = Math.max(tokenRatio, charRatio);
+    if (normalizedTarget.length >= 2 && ratio >= 0.55) {
+      return Math.round(ratio * 90);
     }
+    return 0;
+  }
+
+  var bestScore = scoreAgainst(product.normalizedName, product.tokens);
+  (product.aliasTokens || []).forEach(function checkAlias(alias) {
+    bestScore = Math.max(bestScore, scoreAgainst(alias.normalized, alias.tokens));
   });
-  return best && best.score >= 50 ? best : null;
+  return bestScore;
+}
+
+function getReceiptProductRecommendations(line, products, limit) {
+  return products.map(function mapProduct(product) {
+    return {
+      productId: product.id,
+      productName: product.name,
+      unit: product.unit,
+      score: getReceiptProductScore(line, product)
+    };
+  }).filter(function filterItem(item) {
+    return item.score > 0;
+  }).sort(function sortItems(a, b) {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    return String(a.productName).localeCompare(String(b.productName), "zh-CN");
+  }).slice(0, limit || 3);
+}
+
+function findBestReceiptProduct(line, products) {
+  const recommendations = getReceiptProductRecommendations(line, products, 1);
+  if (!recommendations.length || recommendations[0].score < 50) {
+    return null;
+  }
+  const product = products.find(function findProduct(item) {
+    return item.id === recommendations[0].productId;
+  });
+  return product
+    ? { product: product, score: recommendations[0].score }
+    : null;
 }
 
 function extractReceiptQuantity(line, product) {
@@ -647,7 +728,7 @@ async function scanReceiptImage(api, imagePath) {
   const text = result && result.data ? result.data.text : "";
   const lines = splitReceiptLines(text).map(cleanReceiptLine).filter(Boolean);
   const matchedItems = [];
-  const unmatchedLines = [];
+  const unmatchedItems = [];
 
   lines.forEach(function handleLine(line) {
     if (shouldIgnoreReceiptLine(line)) {
@@ -655,14 +736,23 @@ async function scanReceiptImage(api, imagePath) {
     }
     const productMatch = findBestReceiptProduct(line, products);
     if (!productMatch) {
-      if (containsReceiptFoodKeyword(line)) {
-        unmatchedLines.push(line);
-      }
+      const recommendedProducts = getReceiptProductRecommendations(line, products, 3);
+      unmatchedItems.push({
+        sourceLine: line,
+        guessedQuantity: extractReceiptQuantity(line, null),
+        guessedAmount: extractReceiptAmount(line),
+        recommendedProducts: recommendedProducts
+      });
       return;
     }
     const quantity = extractReceiptQuantity(line, productMatch.product);
     if (!quantity) {
-      unmatchedLines.push(line);
+      unmatchedItems.push({
+        sourceLine: line,
+        guessedQuantity: "",
+        guessedAmount: extractReceiptAmount(line),
+        recommendedProducts: getReceiptProductRecommendations(line, products, 3)
+      });
       return;
     }
     matchedItems.push({
@@ -697,7 +787,10 @@ async function scanReceiptImage(api, imagePath) {
   return {
     rawText: text,
     recognizedItems: mergedItems,
-    unmatchedLines: unmatchedLines
+    unmatchedItems: unmatchedItems,
+    unmatchedLines: unmatchedItems.map(function mapItem(item) {
+      return item.sourceLine;
+    })
   };
 }
 
@@ -714,6 +807,98 @@ function getProductSalesSummary(api, fromDate, toDate, storeName) {
       saleMode: row.sale_mode,
       totalQuantity: money(row.total_quantity),
       totalAmount: money(row.total_amount)
+    };
+  });
+}
+
+function getPurchaseEntries(api, date, storeName) {
+  const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
+  const filter = buildStoreFilter("store_name", normalizedStoreName);
+  return api.all(
+    "SELECT * FROM purchase_entries WHERE purchase_date = ?" + filter.clause + " ORDER BY id DESC",
+    [date].concat(filter.params)
+  ).map(function mapRow(row) {
+    return {
+      id: row.id,
+      date: row.purchase_date,
+      storeName: normalizeStoreName(row.store_name),
+      productName: row.product_name,
+      quantity: money(row.quantity),
+      unit: row.unit || "",
+      unitCost: money(row.unit_cost),
+      totalCost: money(row.total_cost),
+      supplier: row.supplier || "",
+      note: row.note || "",
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  });
+}
+
+function getMonthlyPurchaseEntries(api, month, storeName) {
+  const fromDate = month + "-01";
+  const toDate = month + "-31";
+  const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
+  const filter = buildStoreFilter("store_name", normalizedStoreName);
+  return api.all(
+    "SELECT * FROM purchase_entries WHERE purchase_date BETWEEN ? AND ?" + filter.clause + " ORDER BY purchase_date ASC, id ASC",
+    [fromDate, toDate].concat(filter.params)
+  ).map(function mapRow(row) {
+    return {
+      id: row.id,
+      date: row.purchase_date,
+      storeName: normalizeStoreName(row.store_name),
+      productName: row.product_name,
+      quantity: money(row.quantity),
+      unit: row.unit || "",
+      unitCost: money(row.unit_cost),
+      totalCost: money(row.total_cost),
+      supplier: row.supplier || "",
+      note: row.note || "",
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  });
+}
+
+function getMonthlyPurchaseSummary(api, month, storeName) {
+  const entries = getMonthlyPurchaseEntries(api, month, storeName);
+  const totalCost = entries.reduce(function sum(acc, item) {
+    return acc + money(item.totalCost);
+  }, 0);
+  return {
+    totalCost: money(totalCost),
+    entryCount: entries.length
+  };
+}
+
+function getMonthlyStoreSalesSummary(api, month) {
+  const fromDate = month + "-01";
+  const toDate = month + "-31";
+  const saleRows = api.all(
+    "SELECT store_name, ROUND(SUM(sales_total), 2) AS sales_total, ROUND(SUM(actual_received), 2) AS actual_received FROM daily_ledgers WHERE ledger_date BETWEEN ? AND ? GROUP BY store_name ORDER BY store_name ASC",
+    [fromDate, toDate]
+  );
+  const purchaseRows = api.all(
+    "SELECT store_name, ROUND(SUM(total_cost), 2) AS total_cost FROM purchase_entries WHERE purchase_date BETWEEN ? AND ? GROUP BY store_name ORDER BY store_name ASC",
+    [fromDate, toDate]
+  );
+  const purchaseMap = {};
+  purchaseRows.forEach(function fillPurchaseMap(row) {
+    purchaseMap[normalizeStoreName(row.store_name)] = money(row.total_cost);
+  });
+  return saleRows.map(function mapRow(row) {
+    const storeName = normalizeStoreName(row.store_name);
+    const salesTotal = money(row.sales_total);
+    const purchaseTotal = money(purchaseMap[storeName] || 0);
+    return {
+      storeName: storeName,
+      salesTotal: salesTotal,
+      actualReceived: money(row.actual_received),
+      purchaseTotal: purchaseTotal,
+      profit: money(salesTotal - purchaseTotal)
     };
   });
 }
@@ -802,6 +987,7 @@ function getLedgerBundle(api, date, storeName) {
       updatedAt: row.updated_at
     };
   });
+  const purchases = getPurchaseEntries(api, date, normalizedStoreName);
 
   const expenseTotal = expenses.reduce(function sum(total, item) {
     return total + item.amount;
@@ -825,6 +1011,7 @@ function getLedgerBundle(api, date, storeName) {
     },
     sales: sales,
     expenses: expenses,
+    purchases: purchases,
     productSummary: getProductSalesSummary(api, date, date, normalizedStoreName),
     topProducts: getTopProducts(api, date, date, 10, normalizedStoreName)
   };
@@ -858,6 +1045,7 @@ function getMonthlySummary(api, month, storeName) {
     const salesTotal = money(row.sales_total);
     return {
       date: row.ledger_date,
+      storeName: normalizedStoreName || "All Stores",
       salesTotal: salesTotal,
       actualReceived: money(row.actual_received),
       expenseTotal: expenseTotal,
@@ -875,6 +1063,8 @@ function getMonthlySummary(api, month, storeName) {
     },
     { salesTotal: 0, actualReceived: 0, expenseTotal: 0, profit: 0 }
   );
+  const monthlyPurchases = getMonthlyPurchaseEntries(api, month, normalizedStoreName);
+  const purchaseSummary = getMonthlyPurchaseSummary(api, month, normalizedStoreName);
 
   return {
     month: month,
@@ -885,6 +1075,9 @@ function getMonthlySummary(api, month, storeName) {
       profit: money(totals.profit)
     },
     days: days,
+    purchases: monthlyPurchases,
+    purchaseSummary: purchaseSummary,
+    storeSalesSummary: normalizedStoreName ? [] : getMonthlyStoreSalesSummary(api, month),
     productSummary: getProductSalesSummary(api, fromDate, toDate, normalizedStoreName),
     topProducts: getTopProducts(api, fromDate, toDate, 10, normalizedStoreName)
   };
@@ -1185,6 +1378,7 @@ function createApp(api) {
         return {
           id: row.id,
           name: row.name,
+          keywords: row.keywords || "",
           saleMode: row.sale_mode,
           unit: row.unit,
           price: money(row.price),
@@ -1206,6 +1400,7 @@ function createApp(api) {
     const id = body.id ? intValue(body.id, null) : null;
     const payload = {
       name: String(body.name || "").trim(),
+      keywords: String(body.keywords || "").trim(),
       saleMode: body.saleMode === "weight" ? "weight" : "piece",
       unit: String(body.unit || "").trim() || "piece",
       price: money(body.price),
@@ -1219,13 +1414,13 @@ function createApp(api) {
 
     if (id) {
       api.run(
-        "UPDATE products SET name = ?, sale_mode = ?, unit = ?, price = ?, is_active = ?, sort_order = ?, updated_at = ? WHERE id = ?",
-        [payload.name, payload.saleMode, payload.unit, payload.price, payload.isActive, payload.sortOrder, now, id]
+        "UPDATE products SET name = ?, keywords = ?, sale_mode = ?, unit = ?, price = ?, is_active = ?, sort_order = ?, updated_at = ? WHERE id = ?",
+        [payload.name, payload.keywords, payload.saleMode, payload.unit, payload.price, payload.isActive, payload.sortOrder, now, id]
       );
     } else {
       api.run(
-        "INSERT INTO products (name, sale_mode, unit, price, is_active, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [payload.name, payload.saleMode, payload.unit, payload.price, payload.isActive, payload.sortOrder, now, now]
+        "INSERT INTO products (name, keywords, sale_mode, unit, price, is_active, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [payload.name, payload.keywords, payload.saleMode, payload.unit, payload.price, payload.isActive, payload.sortOrder, now, now]
       );
     }
 
@@ -1403,6 +1598,58 @@ function createApp(api) {
     res.json({ success: true });
   });
 
+  app.get("/api/purchases/:date", function listPurchases(req, res) {
+    const storeName = resolveRequestedStoreName(req, req.query.storeName, true);
+    res.json({ items: getPurchaseEntries(api, req.params.date, storeName) });
+  });
+
+  app.post("/api/purchases", function createPurchase(req, res) {
+    const body = req.body || {};
+    const date = String(body.date || "").trim();
+    const productName = String(body.productName || "").trim();
+    const quantity = money(body.quantity);
+    const unit = String(body.unit || "").trim();
+    const unitCost = money(body.unitCost);
+    const totalCost = body.totalCost === undefined || body.totalCost === null || body.totalCost === ""
+      ? money(quantity * unitCost)
+      : money(body.totalCost);
+    if (!date || !productName) {
+      return res.status(400).json({ error: "Purchase date and product name are required." });
+    }
+    const now = new Date().toISOString();
+    const storeName = resolveRequestedStoreName(req, body.storeName, false);
+    api.run(
+      "INSERT INTO purchase_entries (purchase_date, store_name, product_name, quantity, unit, unit_cost, total_cost, supplier, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [date, storeName, productName, quantity, unit, unitCost, totalCost, String(body.supplier || ""), String(body.note || ""), req.user.id, now, now]
+    );
+    res.json({ success: true });
+  });
+
+  app.put("/api/purchases/:id", function updatePurchase(req, res) {
+    const body = req.body || {};
+    const productName = String(body.productName || "").trim();
+    const quantity = money(body.quantity);
+    const unit = String(body.unit || "").trim();
+    const unitCost = money(body.unitCost);
+    const totalCost = body.totalCost === undefined || body.totalCost === null || body.totalCost === ""
+      ? money(quantity * unitCost)
+      : money(body.totalCost);
+    if (!productName) {
+      return res.status(400).json({ error: "Product name is required." });
+    }
+    const now = new Date().toISOString();
+    api.run(
+      "UPDATE purchase_entries SET product_name = ?, quantity = ?, unit = ?, unit_cost = ?, total_cost = ?, supplier = ?, note = ?, updated_at = ? WHERE id = ?",
+      [productName, quantity, unit, unitCost, totalCost, String(body.supplier || ""), String(body.note || ""), now, intValue(req.params.id, 0)]
+    );
+    res.json({ success: true });
+  });
+
+  app.delete("/api/purchases/:id", function deletePurchase(req, res) {
+    api.run("DELETE FROM purchase_entries WHERE id = ?", [intValue(req.params.id, 0)]);
+    res.json({ success: true });
+  });
+
   app.get("/api/reports/daily", function reportDaily(req, res) {
     if (!requireOwner(req, res)) {
       return;
@@ -1451,7 +1698,7 @@ function createApp(api) {
     const workbook = createWorkbookForDaily(api, date, storeName);
     const buffer = XLSX.write(workbook, { bookType: "xlsx", type: "buffer" });
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", 'attachment; filename="' + encodeURIComponent("???-" + date + ".xlsx") + '"');
+    res.setHeader("Content-Disposition", 'attachment; filename="' + encodeURIComponent("\u65e5\u62a5-" + date + ".xlsx") + '"');
     res.send(Buffer.from(buffer));
   });
 
@@ -1464,7 +1711,7 @@ function createApp(api) {
     const workbook = createWorkbookForMonthly(api, month, storeName);
     const buffer = XLSX.write(workbook, { bookType: "xlsx", type: "buffer" });
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", 'attachment; filename="' + encodeURIComponent("???-" + month + ".xlsx") + '"');
+    res.setHeader("Content-Disposition", 'attachment; filename="' + encodeURIComponent("\u6708\u62a5-" + month + ".xlsx") + '"');
     res.send(Buffer.from(buffer));
   });
 
@@ -1497,72 +1744,89 @@ function createWorkbookForDaily(api, date, storeName) {
   XLSX.utils.book_append_sheet(
     workbook,
     makeExportSheet([bundle.ledger], {
-      date: "??",
-      storeName: "??",
-      salesTotal: "????",
-      actualReceived: "????",
-      cashAmount: "??",
-      wechatAmount: "??",
-      alipayAmount: "???",
-      refundAmount: "??",
-      roundingAmount: "??",
-      note: "??",
-      expenseTotal: "????",
-      profit: "??"
+      date: "\u65e5\u671f",
+      storeName: "\u95e8\u5e97",
+      salesTotal: "\u9500\u552e\u603b\u989d",
+      actualReceived: "\u5b9e\u9645\u6536\u6b3e",
+      cashAmount: "\u73b0\u91d1",
+      wechatAmount: "\u5fae\u4fe1",
+      alipayAmount: "\u652f\u4ed8\u5b9d",
+      refundAmount: "\u9000\u6b3e",
+      roundingAmount: "\u62b9\u96f6",
+      note: "\u5907\u6ce8",
+      expenseTotal: "\u652f\u51fa\u5408\u8ba1",
+      profit: "\u7b80\u7248\u5229\u6da6"
     }),
-    "DailySummary"
+    "\u65e5\u62a5\u6c47\u603b"
   );
   XLSX.utils.book_append_sheet(
     workbook,
     makeExportSheet(bundle.productSummary, {
-      name: "??",
-      unit: "??",
-      saleMode: "????",
-      totalQuantity: "??",
-      totalAmount: "??"
+      name: "\u5546\u54c1\u540d\u79f0",
+      unit: "\u5355\u4f4d",
+      saleMode: "\u9500\u552e\u65b9\u5f0f",
+      totalQuantity: "\u7d2f\u8ba1\u9500\u91cf",
+      totalAmount: "\u7d2f\u8ba1\u9500\u552e\u989d"
     }),
-    "ProductSummary"
+    "\u5546\u54c1\u6c47\u603b"
   );
   XLSX.utils.book_append_sheet(
     workbook,
     makeExportSheet(bundle.sales, {
-      date: "??",
-      storeName: "??",
-      productName: "??",
-      saleMode: "????",
-      unit: "??",
-      price: "??",
-      quantity: "??",
-      amount: "??",
-      note: "??",
-      createdAt: "????",
-      updatedAt: "????"
+      date: "\u65e5\u671f",
+      storeName: "\u95e8\u5e97",
+      productName: "\u5546\u54c1\u540d\u79f0",
+      saleMode: "\u9500\u552e\u65b9\u5f0f",
+      unit: "\u5355\u4f4d",
+      price: "\u9ed8\u8ba4\u5355\u4ef7",
+      quantity: "\u6570\u91cf/\u91cd\u91cf",
+      amount: "\u6210\u4ea4\u91d1\u989d",
+      note: "\u5907\u6ce8",
+      createdAt: "\u521b\u5efa\u65f6\u95f4",
+      updatedAt: "\u66f4\u65b0\u65f6\u95f4"
     }),
-    "SalesDetails"
+    "\u9500\u552e\u660e\u7ec6"
   );
   XLSX.utils.book_append_sheet(
     workbook,
     makeExportSheet(bundle.expenses, {
-      date: "??",
-      storeName: "??",
-      expenseType: "????",
-      amount: "??",
-      note: "??",
-      createdAt: "????",
-      updatedAt: "????"
+      date: "\u65e5\u671f",
+      storeName: "\u95e8\u5e97",
+      expenseType: "\u652f\u51fa\u7c7b\u578b",
+      amount: "\u91d1\u989d",
+      note: "\u5907\u6ce8",
+      createdAt: "\u521b\u5efa\u65f6\u95f4",
+      updatedAt: "\u66f4\u65b0\u65f6\u95f4"
     }),
-    "ExpenseDetails"
+    "\u652f\u51fa\u660e\u7ec6"
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    makeExportSheet(bundle.purchases, {
+      date: "\u65e5\u671f",
+      storeName: "\u95e8\u5e97",
+      productName: "\u8fdb\u8d27\u5546\u54c1",
+      quantity: "\u6570\u91cf",
+      unit: "\u5355\u4f4d",
+      unitCost: "\u8fdb\u8d27\u5355\u4ef7",
+      totalCost: "\u8fdb\u8d27\u603b\u989d",
+      supplier: "\u4f9b\u5e94\u5546",
+      note: "\u5907\u6ce8",
+      createdAt: "\u521b\u5efa\u65f6\u95f4",
+      updatedAt: "\u66f4\u65b0\u65f6\u95f4"
+    }),
+    "\u8fdb\u8d27\u660e\u7ec6"
   );
   XLSX.utils.book_append_sheet(
     workbook,
     makeExportSheet(bundle.topProducts, {
-      name: "??",
-      unit: "??",
-      saleMode: "????",
-      totalQuantity: "??",
-      totalAmount: "??"
+      name: "\u5546\u54c1\u540d\u79f0",
+      unit: "\u5355\u4f4d",
+      saleMode: "\u9500\u552e\u65b9\u5f0f",
+      totalQuantity: "\u7d2f\u8ba1\u9500\u91cf",
+      totalAmount: "\u7d2f\u8ba1\u9500\u552e\u989d"
     }),
-    "TopProducts"
+    "\u70ed\u9500\u6392\u884c"
   );
   return workbook;
 }
@@ -1571,80 +1835,119 @@ function createWorkbookForMonthly(api, month, storeName) {
   const summary = getMonthlySummary(api, month, storeName);
   const sales = getMonthlySaleEntries(api, month, storeName);
   const expenses = getMonthlyExpenseEntries(api, month, storeName);
+  const purchases = getMonthlyPurchaseEntries(api, month, storeName);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(
     workbook,
     makeExportSheet([summary.totals], {
-      salesTotal: "????",
-      actualReceived: "????",
-      expenseTotal: "????",
-      profit: "??"
+      salesTotal: "\u6708\u9500\u552e\u603b\u989d",
+      actualReceived: "\u6708\u5b9e\u9645\u6536\u6b3e",
+      expenseTotal: "\u6708\u652f\u51fa\u5408\u8ba1",
+      profit: "\u6708\u7b80\u7248\u5229\u6da6"
     }),
-    "MonthlyTotals"
+    "\u6708\u5ea6\u6c47\u603b"
   );
   XLSX.utils.book_append_sheet(
     workbook,
     makeExportSheet(summary.days, {
-      date: "??",
-      storeName: "??",
-      salesTotal: "????",
-      actualReceived: "????",
-      expenseTotal: "????",
-      profit: "??"
+      date: "\u65e5\u671f",
+      storeName: "\u95e8\u5e97",
+      salesTotal: "\u9500\u552e\u603b\u989d",
+      actualReceived: "\u5b9e\u9645\u6536\u6b3e",
+      expenseTotal: "\u652f\u51fa\u5408\u8ba1",
+      profit: "\u7b80\u7248\u5229\u6da6"
     }),
-    "DailyBreakdown"
+    "\u6bcf\u65e5\u9500\u552e\u989d"
   );
   XLSX.utils.book_append_sheet(
     workbook,
     makeExportSheet(summary.productSummary, {
-      name: "??",
-      unit: "??",
-      saleMode: "????",
-      totalQuantity: "??",
-      totalAmount: "??"
+      name: "\u5546\u54c1\u540d\u79f0",
+      unit: "\u5355\u4f4d",
+      saleMode: "\u9500\u552e\u65b9\u5f0f",
+      totalQuantity: "\u7d2f\u8ba1\u9500\u91cf",
+      totalAmount: "\u7d2f\u8ba1\u9500\u552e\u989d"
     }),
-    "ProductSummary"
+    "\u5546\u54c1\u6c47\u603b"
   );
   XLSX.utils.book_append_sheet(
     workbook,
     makeExportSheet(sales, {
-      date: "??",
-      storeName: "??",
-      productName: "??",
-      saleMode: "????",
-      unit: "??",
-      price: "??",
-      quantity: "??",
-      amount: "??",
-      note: "??",
-      createdAt: "????",
-      updatedAt: "????"
+      date: "\u65e5\u671f",
+      storeName: "\u95e8\u5e97",
+      productName: "\u5546\u54c1\u540d\u79f0",
+      saleMode: "\u9500\u552e\u65b9\u5f0f",
+      unit: "\u5355\u4f4d",
+      price: "\u9ed8\u8ba4\u5355\u4ef7",
+      quantity: "\u6570\u91cf/\u91cd\u91cf",
+      amount: "\u6210\u4ea4\u91d1\u989d",
+      note: "\u5907\u6ce8",
+      createdAt: "\u521b\u5efa\u65f6\u95f4",
+      updatedAt: "\u66f4\u65b0\u65f6\u95f4"
     }),
-    "SalesDetails"
+    "\u9500\u552e\u660e\u7ec6"
   );
   XLSX.utils.book_append_sheet(
     workbook,
     makeExportSheet(expenses, {
-      date: "??",
-      storeName: "??",
-      expenseType: "????",
-      amount: "??",
-      note: "??",
-      createdAt: "????",
-      updatedAt: "????"
+      date: "\u65e5\u671f",
+      storeName: "\u95e8\u5e97",
+      expenseType: "\u652f\u51fa\u7c7b\u578b",
+      amount: "\u91d1\u989d",
+      note: "\u5907\u6ce8",
+      createdAt: "\u521b\u5efa\u65f6\u95f4",
+      updatedAt: "\u66f4\u65b0\u65f6\u95f4"
     }),
-    "ExpenseDetails"
+    "\u652f\u51fa\u660e\u7ec6"
   );
   XLSX.utils.book_append_sheet(
     workbook,
-    makeExportSheet(summary.topProducts, {
-      name: "??",
-      unit: "??",
-      saleMode: "????",
-      totalQuantity: "??",
-      totalAmount: "??"
+    makeExportSheet(purchases, {
+      date: "\u65e5\u671f",
+      storeName: "\u95e8\u5e97",
+      productName: "\u8fdb\u8d27\u5546\u54c1",
+      quantity: "\u6570\u91cf",
+      unit: "\u5355\u4f4d",
+      unitCost: "\u8fdb\u8d27\u5355\u4ef7",
+      totalCost: "\u8fdb\u8d27\u603b\u989d",
+      supplier: "\u4f9b\u5e94\u5546",
+      note: "\u5907\u6ce8",
+      createdAt: "\u521b\u5efa\u65f6\u95f4",
+      updatedAt: "\u66f4\u65b0\u65f6\u95f4"
     }),
-    "TopProducts"
+    "\u8fdb\u8d27\u660e\u7ec6"
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    makeExportSheet([summary.purchaseSummary], {
+      totalCost: "\u672c\u6708\u8fdb\u8d27\u603b\u989d",
+      entryCount: "\u672c\u6708\u8fdb\u8d27\u7b14\u6570"
+    }),
+    "\u8fdb\u8d27\u6c47\u603b"
+  );
+  if (summary.storeSalesSummary && summary.storeSalesSummary.length) {
+    XLSX.utils.book_append_sheet(
+      workbook,
+      makeExportSheet(summary.storeSalesSummary, {
+        storeName: "\u95e8\u5e97",
+        salesTotal: "\u9500\u552e\u603b\u989d",
+        actualReceived: "\u5b9e\u9645\u6536\u6b3e",
+        purchaseTotal: "\u8fdb\u8d27\u603b\u989d",
+        profit: "\u9500\u552e\u51cf\u8fdb\u8d27"
+      }),
+      "\u95e8\u5e97\u7ecf\u8425\u6c47\u603b"
+    );
+  }
+  XLSX.utils.book_append_sheet(
+    workbook,
+    makeExportSheet(summary.topProducts, {
+      name: "\u5546\u54c1\u540d\u79f0",
+      unit: "\u5355\u4f4d",
+      saleMode: "\u9500\u552e\u65b9\u5f0f",
+      totalQuantity: "\u7d2f\u8ba1\u9500\u91cf",
+      totalAmount: "\u7d2f\u8ba1\u9500\u552e\u989d"
+    }),
+    "\u70ed\u9500\u6392\u884c"
   );
   return workbook;
 }
