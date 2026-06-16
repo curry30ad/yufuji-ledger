@@ -1,0 +1,35 @@
+于福记熟食店记账系统 公网部署说明
+
+域名：
+yufujishushijizhang.icu
+
+当前项目已经整理成可部署版本。
+适合部署到能长期运行 Node.js 且支持数据持久化的服务器。
+
+推荐方式：
+1. 腾讯云轻量应用服务器
+2. 其他支持 Docker 的云服务器
+
+启动方式：
+1. 上传项目文件到服务器
+2. 进入项目目录
+3. 安装依赖：npm install
+4. 启动项目：npm start
+
+建议环境变量：
+PORT=3000
+DATA_DIR=/opt/yufuji-ledger/data
+
+默认保留账号：
+1. 管理员：owner / admin123
+2. 门店1：store1 / 123456
+3. 门店2：store2 / 123456
+
+当前业务数据已清空，只保留以上账号。
+
+域名解析建议：
+1. 主机记录 @ 解析到服务器公网 IP
+2. 主机记录 www 也解析到同一公网 IP
+
+Nginx 配置文件：
+deploy/nginx.yufujishushijizhang.icu.conf

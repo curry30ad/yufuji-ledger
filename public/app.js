@@ -2,14 +2,18 @@ const state = {
   token: localStorage.getItem("ledger_token") || "",
   user: null,
   users: [],
+  stores: [],
+  selectedStore: "",
   products: [],
+  overviewBundle: null,
   ledgerBundle: null,
   monthlySummary: null,
   analytics: {
     metric: "salesTotal",
     dailyRange: 30,
     data: null
-  }
+  },
+  receiptScan: null
 };
 
 function byId(id) {
@@ -26,6 +30,45 @@ function currentDate() {
 
 function currentMonth() {
   return currentDate().slice(0, 7);
+}
+
+function getSelectedStore() {
+  if (!isOwner()) {
+    return state.user && state.user.storeName ? state.user.storeName : "";
+  }
+  return state.selectedStore || "";
+}
+
+function getStoreQuery() {
+  const storeName = getSelectedStore();
+  if (!isOwner() || !storeName) {
+    return "";
+  }
+  return "storeName=" + encodeURIComponent(storeName);
+}
+
+function appendStoreQuery(url) {
+  const query = getStoreQuery();
+  if (!query) {
+    return url;
+  }
+  return url + (url.includes("?") ? "&" : "?") + query;
+}
+
+function renderStoreFilter() {
+  const select = byId("ownerStoreFilter");
+  if (!select) {
+    return;
+  }
+  const stores = state.stores.slice();
+  if (!state.selectedStore || (state.selectedStore !== "all" && stores.indexOf(state.selectedStore) === -1)) {
+    state.selectedStore = stores[0] || "all";
+  }
+  const options = ['<option value="all">All Stores</option>'].concat(stores.map(function (storeName) {
+    return '<option value="' + storeName + '">' + storeName + "</option>";
+  }));
+  select.innerHTML = options.join("");
+  select.value = state.selectedStore || "all";
 }
 
 function yuan(value) {
@@ -95,6 +138,25 @@ async function downloadFile(url, filename) {
   window.URL.revokeObjectURL(objectUrl);
 }
 
+async function uploadFile(url, file, extraFields) {
+  const formData = new FormData();
+  formData.append("receiptImage", file);
+  Object.keys(extraFields || {}).forEach(function appendField(key) {
+    formData.append(key, extraFields[key]);
+  });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: state.token ? { Authorization: "Bearer " + state.token } : {},
+    body: formData
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+  if (!response.ok) {
+    throw new Error(payload.error || "上传失败");
+  }
+  return payload;
+}
+
 function tableHtml(headers, rows) {
   return "<table><thead><tr>" + headers.map(function (head) {
     return "<th>" + head + "</th>";
@@ -127,10 +189,10 @@ function updateOwnerVisibility() {
 }
 
 function renderOverview() {
-  if (!state.ledgerBundle || !isOwner()) {
+  if (!state.overviewBundle || !isOwner()) {
     return;
   }
-  const ledger = state.ledgerBundle.ledger;
+  const ledger = state.overviewBundle.ledger;
   const cards = [
     { label: "今日销售总额", value: yuan(ledger.salesTotal), sub: "营业额与单品明细分开记录" },
     { label: "今日实际收款", value: yuan(ledger.actualReceived), sub: "现金、微信、支付宝" },
@@ -141,10 +203,10 @@ function renderOverview() {
     return '<article class="metric-card"><div class="label">' + item.label + '</div><div class="value">' + item.value + '</div><div class="sub">' + item.sub + "</div></article>";
   }).join("");
 
-  byId("topProductsTable").innerHTML = state.ledgerBundle.topProducts.length
+  byId("topProductsTable").innerHTML = state.overviewBundle.topProducts.length
     ? tableHtml(
         ["商品", "销量", "金额"],
-        state.ledgerBundle.topProducts.map(function (item) {
+        state.overviewBundle.topProducts.map(function (item) {
           return [
             item.name + ' <span class="pill">' + (item.saleMode === "weight" ? "按重量" : "按份数") + "</span>",
             item.totalQuantity + item.unit,
@@ -155,8 +217,8 @@ function renderOverview() {
     : '<div class="empty">当天还没有单品销售数据。</div>';
 
   const expenseTypeMap = { purchase: "进货支出", daily: "日常支出" };
-  byId("expenseSnapshot").innerHTML = state.ledgerBundle.expenses.length
-    ? '<div class="snapshot-list">' + state.ledgerBundle.expenses.map(function (item) {
+  byId("expenseSnapshot").innerHTML = state.overviewBundle.expenses.length
+    ? '<div class="snapshot-list">' + state.overviewBundle.expenses.map(function (item) {
         return '<div class="snapshot-item"><span>' + expenseTypeMap[item.expenseType] + (item.note ? " · " + item.note : "") + "</span><strong>" + yuan(item.amount) + "</strong></div>";
       }).join("") + "</div>"
     : '<div class="empty">当天还没有支出记录。</div>';
@@ -191,6 +253,113 @@ function renderSales() {
   byId("salesTable").innerHTML = rows.length
     ? tableHtml(["商品", "数量", "金额", "备注", "操作"], rows)
     : '<div class="empty">当天还没有单品销售记录。</div>';
+}
+
+function guessReceiptLineAmount(line) {
+  var text = String(line || "");
+  var decimalMatches = text.match(/\d+\.\d{1,2}/g) || [];
+  if (decimalMatches.length) {
+    return decimalMatches[decimalMatches.length - 1];
+  }
+  var compactMatch = text.match(/(?:¥|￥|#)\s*(\d{3,6})(?!\d)/);
+  if (compactMatch) {
+    var compactValue = Number(compactMatch[1]);
+    return compactValue >= 100 ? (compactValue / 100).toFixed(2) : String(compactValue);
+  }
+  return "";
+}
+
+function guessReceiptLineQuantity(line) {
+  var text = String(line || "");
+  var unitMatch = text.match(/(\d+(?:\.\d+)?)\s*(斤|公斤|千克|kg|KG|克|g|两|个|只|份|袋|盒|包|瓶|桶|根|串|箱)/);
+  if (unitMatch) {
+    return unitMatch[1];
+  }
+  var numbers = text.match(/\d+(?:\.\d+)?/g) || [];
+  if (!numbers.length) {
+    return "";
+  }
+  var firstUseful = numbers.find(function (item) {
+    return String(item).length <= 3 || String(item).includes(".");
+  });
+  return firstUseful || "";
+}
+
+function productOptionsHtml(selectedProductId) {
+  var options = ['<option value="">请选择商品</option>'];
+  state.products.forEach(function (product) {
+    var selected = String(product.id) === String(selectedProductId || "") ? " selected" : "";
+    options.push('<option value="' + product.id + '"' + selected + '>' + product.name + " / " + product.unit + "</option>");
+  });
+  return options.join("");
+}
+
+function buildReceiptReviewItems() {
+  var matched = (state.receiptScan.recognizedItems || []).map(function (item) {
+    return {
+      productId: item.productId,
+      productName: item.productName,
+      quantity: item.quantity,
+      amount: item.amount === null ? "" : item.amount,
+      unit: item.unit || "",
+      confidence: item.confidence || "-",
+      sourceLine: item.sourceLine || "",
+      matchStatus: "自动匹配"
+    };
+  });
+  var manual = (state.receiptScan.unmatchedLines || []).map(function (line) {
+    return {
+      productId: "",
+      productName: "",
+      quantity: guessReceiptLineQuantity(line),
+      amount: guessReceiptLineAmount(line),
+      unit: "",
+      confidence: "-",
+      sourceLine: line,
+      matchStatus: "待手动匹配"
+    };
+  });
+  return matched.concat(manual);
+}
+
+function renderReceiptRecognition() {
+  const target = byId("receiptRecognitionResult");
+  const rawTarget = byId("receiptRawText");
+  if (!target || !rawTarget) {
+    return;
+  }
+  if (!state.receiptScan) {
+    target.innerHTML = '<div class="empty">上传小票后，这里会显示识别出的单品和数量。</div>';
+    rawTarget.innerHTML = "";
+    return;
+  }
+
+  var reviewItems = buildReceiptReviewItems();
+  if (!reviewItems.length) {
+    target.innerHTML = '<div class="empty">这张小票暂时没有识别出可导入的内容，请换更清晰的小票，或手动录入。</div>';
+  } else {
+    const rows = reviewItems.map(function (item, index) {
+      return [
+        '<select class="receipt-select" data-receipt-product="' + index + '">' + productOptionsHtml(item.productId) + "</select>",
+        '<input class="receipt-input" data-receipt-quantity="' + index + '" type="number" step="0.01" value="' + item.quantity + '">',
+        '<input class="receipt-input" data-receipt-amount="' + index + '" type="number" step="0.01" value="' + item.amount + '">',
+        item.matchStatus,
+        String(item.confidence || "-"),
+        item.sourceLine || "-"
+      ];
+    });
+    target.innerHTML =
+      '<div class="status-box">自动匹配不到的行，你可以直接手动选择商品后导入。</div>' +
+      tableHtml(["匹配商品", "数量/重量", "成交金额", "匹配状态", "匹配分数", "识别行"], rows) +
+      '<div class="form-actions" style="margin-top:12px;"><button type="button" id="importReceiptBtn" class="primary">导入到当天单品销售</button></div>';
+  }
+
+  const unmatched = (state.receiptScan.unmatchedLines || []).length
+    ? "<strong>未自动匹配内容：</strong>\n" + state.receiptScan.unmatchedLines.join("\n")
+    : "";
+  rawTarget.innerHTML = '<div class="status-box"><div><strong>OCR 原文：</strong></div><pre class="receipt-pre">' +
+    ((state.receiptScan.rawText || "").trim() || "无") +
+    "</pre>" + (unmatched ? '<pre class="receipt-pre unmatched-pre">' + unmatched + "</pre>" : "") + "</div>";
 }
 
 function renderExpenses() {
@@ -233,22 +402,23 @@ function renderUsers(items) {
   const rows = items.map(function (item) {
     const ownerAccount = item.role === "owner";
     const actions = ownerAccount
-      ? '<span class="pill">系统账号</span>'
-      : '<button class="ghost small-btn" data-user-edit="' + item.id + '">编辑</button> ' +
-        '<button class="ghost small-btn" data-user-reset="' + item.id + '">重置密码</button> ' +
-        '<button class="ghost small-btn" data-user-delete="' + item.id + '">删除</button>';
+      ? '<span class="pill">System</span>'
+      : '<button class="ghost small-btn" data-user-edit="' + item.id + '">Edit</button> ' +
+        '<button class="ghost small-btn" data-user-reset="' + item.id + '">Reset Password</button> ' +
+        '<button class="ghost small-btn" data-user-delete="' + item.id + '">Delete</button>';
     return [
       item.name,
       item.username,
-      ownerAccount ? "店主" : "店员",
-      item.status === "active" ? "启用" : "停用",
+      item.storeName || "-",
+      ownerAccount ? "Owner" : "Staff",
+      item.status === "active" ? "Active" : "Inactive",
       String(item.created_at || item.createdAt || "").slice(0, 10),
       actions
     ];
   });
   byId("usersTable").innerHTML = rows.length
-    ? tableHtml(["姓名", "账号", "角色", "状态", "创建时间", "操作"], rows)
-    : '<div class="empty">暂无账号数据。</div>';
+    ? tableHtml(["Name", "Username", "Store", "Role", "Status", "Created", "Actions"], rows)
+    : '<div class="empty">No accounts yet.</div>';
 }
 
 function renderReports() {
@@ -344,29 +514,34 @@ function updateSaleProductOptions() {
 
 async function loadDashboardData() {
   const date = byId("activeDate").value;
+  const storeQuery = getStoreQuery();
   const requests = [
     request("/api/products?includeInactive=" + (isOwner() ? "true" : "false")),
-    request("/api/ledger/" + date)
+    request("/api/ledger/" + date + (storeQuery ? "?" + storeQuery : ""))
   ];
   if (isOwner()) {
-    requests.push(request("/api/reports/monthly?month=" + byId("activeMonth").value));
+    requests.push(request("/api/ledger/" + date + "?storeName=all"));
+    requests.push(request("/api/reports/monthly?month=" + byId("activeMonth").value + (storeQuery ? "&" + storeQuery : "")));
     requests.push(
       request(
         "/api/analytics?metric=" + state.analytics.metric +
         "&dailyRange=" + state.analytics.dailyRange +
         "&endDate=" + byId("activeDate").value +
-        "&monthEnd=" + byId("activeMonth").value
+        "&monthEnd=" + byId("activeMonth").value +
+        (storeQuery ? "&" + storeQuery : "")
       )
     );
   }
   const results = await Promise.all(requests);
   state.products = results[0].items;
   state.ledgerBundle = results[1];
-  state.monthlySummary = isOwner() ? results[2] : null;
-  state.analytics.data = isOwner() ? results[3] : null;
+  state.overviewBundle = isOwner() ? results[2] : results[1];
+  state.monthlySummary = isOwner() ? results[3] : null;
+  state.analytics.data = isOwner() ? results[4] : null;
   updateSaleProductOptions();
   fillLedgerForm();
   renderSales();
+  renderReceiptRecognition();
   renderExpenses();
   if (isOwner()) {
     renderOverview();
@@ -381,7 +556,9 @@ async function loadUsersIfNeeded() {
     return;
   }
   const payload = await request("/api/users");
+  state.stores = Array.isArray(payload.stores) ? payload.stores : [];
   renderUsers(payload.items);
+  renderStoreFilter();
 }
 
 function resetProductForm() {
@@ -413,6 +590,9 @@ function resetUserForm() {
   form.reset();
   form.elements.id.value = "";
   form.elements.status.value = "active";
+  if (form.elements.storeName) {
+    form.elements.storeName.value = state.selectedStore && state.selectedStore !== "all" ? state.selectedStore : "";
+  }
 }
 
 async function handleLogin(event) {
@@ -439,22 +619,31 @@ async function handleLogin(event) {
 async function afterLogin() {
   byId("loginView").classList.add("hidden");
   byId("dashboardView").classList.remove("hidden");
-  byId("welcomeText").textContent = state.user.name + "，欢迎回来";
+  byId("welcomeText").textContent = state.user.name + ", welcome back";
   byId("activeDate").value = currentDate();
   byId("activeMonth").value = currentMonth();
+  if (isOwner()) {
+    await loadUsersIfNeeded();
+  }
   updateOwnerVisibility();
   setSection(isOwner() ? "overviewSection" : "ledgerSection");
   await loadDashboardData();
-  await loadUsersIfNeeded();
+  if (isOwner()) {
+    resetUserForm();
+  }
 }
 
 function logout() {
   state.token = "";
   state.user = null;
   state.users = [];
+  state.stores = [];
+  state.selectedStore = "";
   state.products = [];
+  state.overviewBundle = null;
   state.ledgerBundle = null;
   state.monthlySummary = null;
+  state.receiptScan = null;
   localStorage.removeItem("ledger_token");
   byId("dashboardView").classList.add("hidden");
   byId("loginView").classList.remove("hidden");
@@ -473,7 +662,8 @@ async function submitLedgerForm(event) {
       alipayAmount: form.elements.alipayAmount.value,
       refundAmount: form.elements.refundAmount.value,
       roundingAmount: form.elements.roundingAmount.value,
-      note: form.elements.note.value
+      note: form.elements.note.value,
+      storeName: getSelectedStore()
     })
   });
   await loadDashboardData();
@@ -490,11 +680,77 @@ async function submitSaleForm(event) {
       productId: form.elements.productId.value,
       quantity: form.elements.quantity.value,
       amount: form.elements.amount.value,
-      note: form.elements.note.value
+      note: form.elements.note.value,
+      storeName: getSelectedStore()
     })
   });
   resetSaleForm();
   await loadDashboardData();
+}
+
+function collectReceiptImportItems() {
+  if (!state.receiptScan) {
+    return [];
+  }
+  return buildReceiptReviewItems().map(function (item, index) {
+    const productInput = document.querySelector('[data-receipt-product="' + index + '"]');
+    const quantityInput = document.querySelector('[data-receipt-quantity="' + index + '"]');
+    const amountInput = document.querySelector('[data-receipt-amount="' + index + '"]');
+    return {
+      productId: productInput ? productInput.value : item.productId,
+      quantity: quantityInput ? quantityInput.value : item.quantity,
+      amount: amountInput ? amountInput.value : item.amount,
+      sourceLine: item.sourceLine
+    };
+  }).filter(function (item) {
+    return item.productId && Number(item.quantity) > 0;
+  });
+}
+
+async function submitReceiptScan(event) {
+  event.preventDefault();
+  const fileInput = byId("receiptImageInput");
+  const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+  if (!file) {
+    showMessage("请先选择一张小票图片。");
+    return;
+  }
+  byId("receiptScanBtn").disabled = true;
+  byId("receiptRecognitionResult").innerHTML = '<div class="empty">正在识别小票，请稍候……</div>';
+  try {
+    state.receiptScan = await uploadFile("/api/receipt/scan", file, {
+      date: byId("activeDate").value,
+      storeName: getSelectedStore()
+    });
+    renderReceiptRecognition();
+  } catch (error) {
+    state.receiptScan = null;
+    renderReceiptRecognition();
+    showMessage(error.message);
+  } finally {
+    byId("receiptScanBtn").disabled = false;
+  }
+}
+
+async function importReceiptItems() {
+  const items = collectReceiptImportItems();
+  if (!items.length) {
+    showMessage("没有可导入的识别结果。");
+    return;
+  }
+  await request("/api/receipt/import", {
+    method: "POST",
+    body: JSON.stringify({
+      date: byId("activeDate").value,
+      items: items,
+      storeName: getSelectedStore()
+    })
+  });
+  state.receiptScan = null;
+  byId("receiptForm").reset();
+  renderReceiptRecognition();
+  await loadDashboardData();
+  showMessage("小票识别结果已经导入到当天单品销售。");
 }
 
 async function submitExpenseForm(event) {
@@ -507,7 +763,8 @@ async function submitExpenseForm(event) {
       date: byId("activeDate").value,
       expenseType: form.elements.expenseType.value,
       amount: form.elements.amount.value,
-      note: form.elements.note.value
+      note: form.elements.note.value,
+      storeName: getSelectedStore()
     })
   });
   resetExpenseForm();
@@ -543,6 +800,7 @@ async function submitUserForm(event) {
       name: form.elements.name.value,
       username: form.elements.username.value,
       password: form.elements.password.value,
+      storeName: form.elements.storeName.value,
       status: form.elements.status.value
     })
   });
@@ -612,11 +870,16 @@ function fillUserForm(userId) {
   form.elements.name.value = item.name;
   form.elements.username.value = item.username;
   form.elements.password.value = "";
+  form.elements.storeName.value = item.storeName || "";
   form.elements.status.value = item.status;
   setSection("usersSection");
 }
 
 async function handleBodyClick(event) {
+  if (event.target.id === "importReceiptBtn") {
+    await importReceiptItems();
+    return;
+  }
   const saleEditId = event.target.getAttribute("data-sale-edit");
   const saleDeleteId = event.target.getAttribute("data-sale-delete");
   const expenseEditId = event.target.getAttribute("data-expense-edit");
@@ -694,8 +957,10 @@ async function bootstrap() {
   byId("loginForm").addEventListener("submit", handleLogin);
   byId("logoutBtn").addEventListener("click", logout);
   byId("refreshBtn").addEventListener("click", async function () {
+    if (isOwner()) {
+      await loadUsersIfNeeded();
+    }
     await loadDashboardData();
-    await loadUsersIfNeeded();
   });
 
   document.querySelectorAll(".nav-btn").forEach(function (btn) {
@@ -708,6 +973,7 @@ async function bootstrap() {
 
   byId("ledgerForm").addEventListener("submit", submitLedgerForm);
   byId("saleForm").addEventListener("submit", submitSaleForm);
+  byId("receiptForm").addEventListener("submit", submitReceiptScan);
   byId("expenseForm").addEventListener("submit", submitExpenseForm);
   byId("productForm").addEventListener("submit", submitProductForm);
   byId("userForm").addEventListener("submit", submitUserForm);
@@ -717,18 +983,31 @@ async function bootstrap() {
   byId("resetExpenseBtn").addEventListener("click", resetExpenseForm);
   byId("resetUserBtn").addEventListener("click", resetUserForm);
 
-  byId("activeDate").addEventListener("change", loadDashboardData);
+  byId("activeDate").addEventListener("change", function () {
+    state.receiptScan = null;
+    renderReceiptRecognition();
+    loadDashboardData();
+  });
   byId("activeMonth").addEventListener("change", function () {
     if (isOwner()) {
       loadDashboardData();
     }
   });
+  if (byId("ownerStoreFilter")) {
+    byId("ownerStoreFilter").addEventListener("change", function (event) {
+      state.selectedStore = event.target.value;
+      state.receiptScan = null;
+      renderReceiptRecognition();
+      loadDashboardData();
+      resetUserForm();
+    });
+  }
 
   byId("exportDailyBtn").addEventListener("click", function () {
-    downloadFile("/api/export/daily?date=" + byId("activeDate").value, "日报-" + byId("activeDate").value + ".xlsx");
+    downloadFile(appendStoreQuery("/api/export/daily?date=" + byId("activeDate").value), "日报-" + byId("activeDate").value + ".xlsx");
   });
   byId("exportMonthlyBtn").addEventListener("click", function () {
-    downloadFile("/api/export/monthly?month=" + byId("activeMonth").value, "月报-" + byId("activeMonth").value + ".xlsx");
+    downloadFile(appendStoreQuery("/api/export/monthly?month=" + byId("activeMonth").value), "月报-" + byId("activeMonth").value + ".xlsx");
   });
 
   document.body.addEventListener("click", function (event) {

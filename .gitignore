@@ -2,16 +2,25 @@ node_modules/
 
 data/*
 !data/.gitkeep
+data/tessdata/
+data/uploads/
 
 server.log
 server-error.log
 *.log
+*.zip
+*.traineddata
+*.traineddata.gz
 
 .DS_Store
 Thumbs.db
 
 dist/
 build/
+.cloudbase-backup/
+.tmp-tencent-sdk/
+.zip-staging-api/
+cloudbase-api-next/
 
 .env
 .env.local

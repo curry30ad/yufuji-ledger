@@ -30,8 +30,8 @@
     }
   },
   "compileType": "miniprogram",
-  "libVersion": "3.5.4",
-  "appid": "wx5eac2c3762211749",
+  "libVersion": "3.16.1",
+  "appid": "wx4e205c2713ca4d06",
   "projectname": "yufuji-ledger-miniapp",
   "simulatorPluginLibVersion": {},
   "editorSetting": {}

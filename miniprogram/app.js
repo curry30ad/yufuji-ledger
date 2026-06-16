@@ -2,7 +2,7 @@ App({
   globalData: {
     token: wx.getStorageSync("ledger_token") || "",
     user: wx.getStorageSync("ledger_user") || null,
-    baseUrl: "https://your-domain.example.com"
+    baseUrl: "https://yufujishushijizhang.icu"
   },
 
   setSession(token, user) {

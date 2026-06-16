@@ -338,6 +338,33 @@ th {
   padding: 10px 0;
 }
 
+.receipt-input {
+  min-width: 96px;
+  padding: 8px 10px;
+}
+
+.receipt-select {
+  min-width: 180px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.receipt-pre {
+  white-space: pre-wrap;
+  background: rgba(173, 59, 31, 0.05);
+  border: 1px solid rgba(173, 59, 31, 0.1);
+  border-radius: 14px;
+  padding: 12px;
+  margin: 10px 0 0;
+  color: var(--ink);
+}
+
+.unmatched-pre {
+  background: rgba(201, 59, 44, 0.06);
+}
+
 .analytics-toolbar,
 .toggle-group {
   display: flex;

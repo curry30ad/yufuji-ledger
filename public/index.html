@@ -65,6 +65,12 @@
               <span>月份</span>
               <input id="activeMonth" type="month">
             </label>
+                        <label class="owner-only">
+              <span>Store</span>
+              <select id="ownerStoreFilter">
+                <option value="all">All Stores</option>
+              </select>
+            </label>
             <button id="refreshBtn" class="ghost">刷新数据</button>
           </div>
 
@@ -140,6 +146,17 @@
               <div class="panel-head">
                 <h3>当天销售明细</h3>
               </div>
+              <form id="receiptForm" class="form-grid" style="margin-bottom:16px;">
+                <label class="full">
+                  <span>上传收银小票图片</span>
+                  <input id="receiptImageInput" name="receiptImage" type="file" accept="image/png,image/jpeg,image/webp" required>
+                </label>
+                <div class="full form-actions">
+                  <button type="submit" id="receiptScanBtn" class="primary">识别小票内容</button>
+                </div>
+              </form>
+              <div id="receiptRecognitionResult"></div>
+              <div id="receiptRawText"></div>
               <div id="salesTable"></div>
             </article>
           </section>
@@ -278,6 +295,7 @@
                 <input name="id" type="hidden">
                 <label><span>姓名</span><input name="name" required></label>
                 <label><span>登录账号</span><input name="username" required autocomplete="username"></label>
+                <label><span>Store</span><input name="storeName" required placeholder="e.g. Store 1"></label>
                 <label><span>登录密码</span><input name="password" type="password" autocomplete="new-password" placeholder="新增时必填，编辑时留空表示不改"></label>
                 <label>
                   <span>状态</span>

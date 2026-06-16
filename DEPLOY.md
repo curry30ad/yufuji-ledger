@@ -1,56 +1,90 @@
 # 公网部署说明
 
-当前这套记账系统是“可写账本”，不能部署到不带持久化数据的纯静态平台。
+你的域名是：
+
+- `yufujishushijizhang.icu`
+
+这套项目是可写账本系统，必须部署到支持长期运行和持久化数据的服务上，不能只放到纯静态托管。
+
+## 推荐部署方式
+
+优先推荐以下两种：
+
+1. 腾讯云轻量应用服务器
+2. 支持持久化磁盘的 Docker 平台
+
+如果你后面决定用腾讯云轻量服务器，这套项目已经可以直接部署。
 
 ## 已准备好的部署文件
 
 - `Dockerfile`
-- `render.yaml`
-- `server.js` 已支持用环境变量指定数据库目录
+- `package.json`
+- `server.js`
+- `deploy/nginx.yufujishushijizhang.icu.conf`
 
-## 推荐部署方式
+## 运行要求
 
-推荐用支持持久化磁盘的后端平台，例如 Render。
+- Node.js 20
+- Linux 服务器
+- 一个可写的数据目录
 
-### Render 部署要点
+## 直接启动
 
-1. 新建 Web Service
-2. 选择当前项目仓库
-3. Render 会自动识别 `render.yaml`
-4. 自动创建：
-   - Web 服务
-   - 1GB 持久化磁盘
-   - `DATA_DIR=/var/data/yufuji-ledger`
-5. 部署成功后会得到一个公网 `https` 地址
-
-## 小程序里要改的地址
-
-部署成功后，把下面文件里的地址改成你的公网地址：
-
-- `miniprogram/app.js`
-
-把：
-
-```js
-baseUrl: "https://your-domain.example.com"
+```bash
+npm install
+npm start
 ```
 
-改成：
+默认端口：
 
-```js
-baseUrl: "https://你的公网地址"
+```text
+3000
 ```
 
-## 当前阻塞点
+## 建议环境变量
 
-这次没有直接完成“真正上线”，原因不是代码问题，而是当前环境里没有可用的部署平台登录态，也没有可直接调用的现成部署权限。
+```bash
+PORT=3000
+DATA_DIR=/opt/yufuji-ledger/data
+```
 
-也就是说：
+## 域名绑定方式
 
-- 代码已经整理成可部署状态
-- 但最后一步“发到你的云平台账号里”还需要平台授权
+部署成功后，把域名解析到你的服务器公网 IP：
 
-如果你后面提供其中一种条件，我就可以继续：
+- 主机记录：`@`
+- 记录类型：`A`
+- 记录值：你的服务器公网 IP
 
-1. 你指定要用哪个平台并提供登录权限
-2. 你自己先在平台上创建项目，我继续帮你把它发上去
+如果你还要让 `www.yufujishushijizhang.icu` 也能访问：
+
+- 主机记录：`www`
+- 记录类型：`A`
+- 记录值：同一个公网 IP
+
+## Nginx 反向代理
+
+Nginx 配置文件已经准备好：
+
+- [deploy/nginx.yufujishushijizhang.icu.conf](C:/Users/Administrator/Documents/记账软件/deploy/nginx.yufujishushijizhang.icu.conf)
+
+它会把：
+
+- `http://yufujishushijizhang.icu`
+- `http://www.yufujishushijizhang.icu`
+
+转发到本机 `3000` 端口。
+
+## HTTPS
+
+上线后建议再申请证书并启用 HTTPS。
+
+如果你继续走腾讯云服务器，这一步我可以下一轮继续帮你整理成完整操作顺序。
+
+## 默认账号
+
+- 管理员：`owner / admin123`
+- 门店1：`store1 / 123456`
+- 门店2：`store2 / 123456`
+
+当前数据库已清空业务数据，只保留以上 3 个账号。
