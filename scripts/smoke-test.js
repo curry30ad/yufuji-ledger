@@ -91,6 +91,7 @@ async function main() {
       cashAmount: 120,
       wechatAmount: 250,
       alipayAmount: 300,
+      memberCardAmount: 0,
       refundAmount: 18,
       roundingAmount: 0,
       note: "烟熏鸡活动日"

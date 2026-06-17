@@ -264,6 +264,7 @@ function createSchema(api) {
       cash_amount REAL NOT NULL DEFAULT 0,
       wechat_amount REAL NOT NULL DEFAULT 0,
       alipay_amount REAL NOT NULL DEFAULT 0,
+      member_card_amount REAL NOT NULL DEFAULT 0,
       refund_amount REAL NOT NULL DEFAULT 0,
       rounding_amount REAL NOT NULL DEFAULT 0,
       note TEXT NOT NULL DEFAULT '',
@@ -358,6 +359,7 @@ function ensureDailyLedgerCompositeKey(api) {
       cash_amount REAL NOT NULL DEFAULT 0,
       wechat_amount REAL NOT NULL DEFAULT 0,
       alipay_amount REAL NOT NULL DEFAULT 0,
+      member_card_amount REAL NOT NULL DEFAULT 0,
       refund_amount REAL NOT NULL DEFAULT 0,
       rounding_amount REAL NOT NULL DEFAULT 0,
       note TEXT NOT NULL DEFAULT '',
@@ -372,11 +374,11 @@ function ensureDailyLedgerCompositeKey(api) {
     api.raw.exec(`
       INSERT INTO daily_ledgers_new (
         id, ledger_date, store_name, sales_total, actual_received, cash_amount, wechat_amount,
-        alipay_amount, refund_amount, rounding_amount, note, created_by, updated_by, created_at, updated_at
+        alipay_amount, member_card_amount, refund_amount, rounding_amount, note, created_by, updated_by, created_at, updated_at
       )
       SELECT
         id, ledger_date, COALESCE(NULLIF(store_name, ''), '${DEFAULT_STORE_NAME}'), sales_total, actual_received,
-        cash_amount, wechat_amount, alipay_amount, refund_amount, rounding_amount, note,
+        cash_amount, wechat_amount, alipay_amount, ${tableHasColumn(api, "daily_ledgers", "member_card_amount") ? "member_card_amount" : "0"}, refund_amount, rounding_amount, note,
         created_by, updated_by, created_at, updated_at
       FROM daily_ledgers
     `);
@@ -384,11 +386,11 @@ function ensureDailyLedgerCompositeKey(api) {
     api.raw.exec(`
       INSERT INTO daily_ledgers_new (
         id, ledger_date, store_name, sales_total, actual_received, cash_amount, wechat_amount,
-        alipay_amount, refund_amount, rounding_amount, note, created_by, updated_by, created_at, updated_at
+        alipay_amount, member_card_amount, refund_amount, rounding_amount, note, created_by, updated_by, created_at, updated_at
       )
       SELECT
         id, ledger_date, '${DEFAULT_STORE_NAME}', sales_total, actual_received, cash_amount, wechat_amount,
-        alipay_amount, refund_amount, rounding_amount, note, created_by, updated_by, created_at, updated_at
+        alipay_amount, ${tableHasColumn(api, "daily_ledgers", "member_card_amount") ? "member_card_amount" : "0"}, refund_amount, rounding_amount, note, created_by, updated_by, created_at, updated_at
       FROM daily_ledgers
     `);
   }
@@ -412,13 +414,14 @@ function mergeLegacyDailyLedgerStore(api, fromStoreName, toStoreName) {
       .join(" | ");
 
     api.run(
-      "UPDATE daily_ledgers SET sales_total = ?, actual_received = ?, cash_amount = ?, wechat_amount = ?, alipay_amount = ?, refund_amount = ?, rounding_amount = ?, note = ?, updated_at = ? WHERE id = ?",
+      "UPDATE daily_ledgers SET sales_total = ?, actual_received = ?, cash_amount = ?, wechat_amount = ?, alipay_amount = ?, member_card_amount = ?, refund_amount = ?, rounding_amount = ?, note = ?, updated_at = ? WHERE id = ?",
       [
         money(targetRow.sales_total) + money(sourceRow.sales_total),
         money(targetRow.actual_received) + money(sourceRow.actual_received),
         money(targetRow.cash_amount) + money(sourceRow.cash_amount),
         money(targetRow.wechat_amount) + money(sourceRow.wechat_amount),
         money(targetRow.alipay_amount) + money(sourceRow.alipay_amount),
+        money(targetRow.member_card_amount) + money(sourceRow.member_card_amount),
         money(targetRow.refund_amount) + money(sourceRow.refund_amount),
         money(targetRow.rounding_amount) + money(sourceRow.rounding_amount),
         mergedNote,
@@ -438,6 +441,7 @@ function migrateSchema(api) {
   ensureColumn(api, "purchase_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "purchase_entries", "supplier TEXT NOT NULL DEFAULT ''");
   ensureDailyLedgerCompositeKey(api);
+  ensureColumn(api, "daily_ledgers", "member_card_amount REAL NOT NULL DEFAULT 0");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_sale_entries_date_store ON sale_entries(sale_date, store_name)");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_expense_entries_date_store ON expense_entries(expense_date, store_name)");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_purchase_entries_date_store ON purchase_entries(purchase_date, store_name)");
@@ -586,7 +590,7 @@ function ensureLedger(api, date, userId, storeName) {
   }
 
   api.run(
-    "INSERT INTO daily_ledgers (ledger_date, store_name, sales_total, actual_received, cash_amount, wechat_amount, alipay_amount, refund_amount, rounding_amount, note, created_by, updated_by, created_at, updated_at) VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, '', ?, ?, ?, ?)",
+    "INSERT INTO daily_ledgers (ledger_date, store_name, sales_total, actual_received, cash_amount, wechat_amount, alipay_amount, member_card_amount, refund_amount, rounding_amount, note, created_by, updated_by, created_at, updated_at) VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, '', ?, ?, ?, ?)",
     [date, normalizedStoreName, userId || null, userId || null, now, now]
   );
   return api.one("SELECT * FROM daily_ledgers WHERE ledger_date = ? AND store_name = ?", [date, normalizedStoreName]);
@@ -717,28 +721,28 @@ function findBestReceiptProduct(line, products) {
 
 function extractReceiptQuantity(line, product) {
   const text = String(line || "");
-  const weightMatch = text.match(/(d+(?:.d+)?)s*(?|??|kg|KG|??|g|?|?)/);
+  const weightMatch = text.match(/(\d+(?:\.\d+)?)\s*(斤|公斤|kg|KG|千克|g|克|两)/);
   if (weightMatch) {
     const rawValue = Number(weightMatch[1]);
     const unitText = String(weightMatch[2] || "").toLowerCase();
-    if (unitText === "??" || unitText === "kg" || unitText === "??") {
+    if (unitText === "公斤" || unitText === "kg" || unitText === "千克") {
       return money(rawValue * 2);
     }
-    if (unitText === "g" || unitText === "?") {
+    if (unitText === "g" || unitText === "克") {
       return money(rawValue / 500);
     }
-    if (unitText === "?") {
+    if (unitText === "两") {
       return money(rawValue / 10);
     }
     return money(rawValue);
   }
 
-  const pieceMatch = text.match(/(d+(?:.d+)?)s*(?|?|?|?|?|?|?)/);
+  const pieceMatch = text.match(/(\d+(?:\.\d+)?)\s*(份|盒|袋|包|个|串|只)/);
   if (pieceMatch) {
     return money(pieceMatch[1]);
   }
 
-  const allNumbers = text.match(/d+(?:.d+)?/g) || [];
+  const allNumbers = text.match(/\d+(?:\.\d+)?/g) || [];
   if (!allNumbers.length) {
     return product && product.saleMode === "weight" ? 0.5 : 1;
   }
@@ -758,11 +762,11 @@ function extractReceiptQuantity(line, product) {
 
 function extractReceiptAmount(line) {
   const text = String(line || "");
-  const currencyMatches = [...text.matchAll(/(?:Â¥|ï¿??\s*(\d+\.\d{1,2})/g)].map(function mapMatch(match) {
+  const currencyMatches = [...text.matchAll(/(?:¥|￥)\s*(\d+\.\d{1,2})/g)].map(function mapMatch(match) {
     return Number(match[1]);
   });
   if (!currencyMatches.length) {
-    const compactAmountMatch = text.match(/(?:Â¥|ï¿¥|#)\s*(\d{3,6})(?!\d)/);
+    const compactAmountMatch = text.match(/(?:¥|￥|#)\s*(\d{3,6})(?!\d)/);
     if (!compactAmountMatch) {
       return null;
     }
@@ -969,6 +973,7 @@ function getLedgerBundle(api, date, storeName) {
         acc.cash_amount += money(row.cash_amount);
         acc.wechat_amount += money(row.wechat_amount);
         acc.alipay_amount += money(row.alipay_amount);
+        acc.member_card_amount += money(row.member_card_amount);
         acc.refund_amount += money(row.refund_amount);
         acc.rounding_amount += money(row.rounding_amount);
         if (row.note) {
@@ -984,6 +989,7 @@ function getLedgerBundle(api, date, storeName) {
         cash_amount: 0,
         wechat_amount: 0,
         alipay_amount: 0,
+        member_card_amount: 0,
         refund_amount: 0,
         rounding_amount: 0,
         notes: []
@@ -997,6 +1003,7 @@ function getLedgerBundle(api, date, storeName) {
         cash_amount: 0,
         wechat_amount: 0,
         alipay_amount: 0,
+        member_card_amount: 0,
         refund_amount: 0,
         rounding_amount: 0,
         notes: []
@@ -1057,6 +1064,7 @@ function getLedgerBundle(api, date, storeName) {
       cashAmount: money(ledger.cash_amount),
       wechatAmount: money(ledger.wechat_amount),
       alipayAmount: money(ledger.alipay_amount),
+      memberCardAmount: money(ledger.member_card_amount),
       refundAmount: money(ledger.refund_amount),
       roundingAmount: money(ledger.rounding_amount),
       note: ledger.note || (Array.isArray(ledger.notes) ? ledger.notes.join(" | ") : ""),
@@ -1081,7 +1089,7 @@ function getMonthlySummary(api, month, storeName) {
   const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
   const ledgerFilter = buildStoreFilter("store_name", normalizedStoreName);
   const ledgerRows = api.all(
-    "SELECT ledger_date, ROUND(SUM(sales_total), 2) AS sales_total, ROUND(SUM(actual_received), 2) AS actual_received FROM daily_ledgers WHERE ledger_date BETWEEN ? AND ?" + ledgerFilter.clause + " GROUP BY ledger_date ORDER BY ledger_date ASC",
+    "SELECT ledger_date, ROUND(SUM(sales_total), 2) AS sales_total, ROUND(SUM(actual_received), 2) AS actual_received, ROUND(SUM(member_card_amount), 2) AS member_card_amount FROM daily_ledgers WHERE ledger_date BETWEEN ? AND ?" + ledgerFilter.clause + " GROUP BY ledger_date ORDER BY ledger_date ASC",
     [fromDate, toDate].concat(ledgerFilter.params)
   );
   const expenseFilter = buildStoreFilter("store_name", normalizedStoreName);
@@ -1102,6 +1110,7 @@ function getMonthlySummary(api, month, storeName) {
       storeName: normalizedStoreName || "All Stores",
       salesTotal: salesTotal,
       actualReceived: money(row.actual_received),
+      memberCardAmount: money(row.member_card_amount),
       expenseTotal: expenseTotal,
       profit: money(salesTotal - expenseTotal)
     };
@@ -1111,11 +1120,12 @@ function getMonthlySummary(api, month, storeName) {
     function reduceTotal(acc, day) {
       acc.salesTotal += day.salesTotal;
       acc.actualReceived += day.actualReceived;
+      acc.memberCardAmount += day.memberCardAmount;
       acc.expenseTotal += day.expenseTotal;
       acc.profit += day.profit;
       return acc;
     },
-    { salesTotal: 0, actualReceived: 0, expenseTotal: 0, profit: 0 }
+    { salesTotal: 0, actualReceived: 0, memberCardAmount: 0, expenseTotal: 0, profit: 0 }
   );
   const monthlyPurchases = getMonthlyPurchaseEntries(api, month, normalizedStoreName);
   const purchaseSummary = getMonthlyPurchaseSummary(api, month, normalizedStoreName);
@@ -1125,6 +1135,7 @@ function getMonthlySummary(api, month, storeName) {
     totals: {
       salesTotal: money(totals.salesTotal),
       actualReceived: money(totals.actualReceived),
+      memberCardAmount: money(totals.memberCardAmount),
       expenseTotal: money(totals.expenseTotal),
       profit: money(totals.profit)
     },
@@ -1498,13 +1509,14 @@ function createApp(api) {
     const now = new Date().toISOString();
     const body = req.body || {};
     api.run(
-      "UPDATE daily_ledgers SET sales_total = ?, actual_received = ?, cash_amount = ?, wechat_amount = ?, alipay_amount = ?, refund_amount = ?, rounding_amount = ?, note = ?, updated_by = ?, updated_at = ? WHERE id = ?",
+      "UPDATE daily_ledgers SET sales_total = ?, actual_received = ?, cash_amount = ?, wechat_amount = ?, alipay_amount = ?, member_card_amount = ?, refund_amount = ?, rounding_amount = ?, note = ?, updated_by = ?, updated_at = ? WHERE id = ?",
       [
         money(body.salesTotal),
         money(body.actualReceived),
         money(body.cashAmount),
         money(body.wechatAmount),
         money(body.alipayAmount),
+        money(body.memberCardAmount),
         money(body.refundAmount),
         money(body.roundingAmount),
         String(body.note || ""),
@@ -1805,6 +1817,7 @@ function createWorkbookForDaily(api, date, storeName) {
       cashAmount: "\u73b0\u91d1",
       wechatAmount: "\u5fae\u4fe1",
       alipayAmount: "\u652f\u4ed8\u5b9d",
+      memberCardAmount: "\u4f1a\u5458\u5361\u6536\u5165",
       refundAmount: "\u9000\u6b3e",
       roundingAmount: "\u62b9\u96f6",
       note: "\u5907\u6ce8",
@@ -1896,6 +1909,7 @@ function createWorkbookForMonthly(api, month, storeName) {
     makeExportSheet([summary.totals], {
       salesTotal: "\u6708\u9500\u552e\u603b\u989d",
       actualReceived: "\u6708\u5b9e\u9645\u6536\u6b3e",
+      memberCardAmount: "\u6708\u4f1a\u5458\u5361\u6536\u5165",
       expenseTotal: "\u6708\u652f\u51fa\u5408\u8ba1",
       profit: "\u6708\u7b80\u7248\u5229\u6da6"
     }),
@@ -1908,6 +1922,7 @@ function createWorkbookForMonthly(api, month, storeName) {
       storeName: "\u95e8\u5e97",
       salesTotal: "\u9500\u552e\u603b\u989d",
       actualReceived: "\u5b9e\u9645\u6536\u6b3e",
+      memberCardAmount: "\u4f1a\u5458\u5361\u6536\u5165",
       expenseTotal: "\u652f\u51fa\u5408\u8ba1",
       profit: "\u7b80\u7248\u5229\u6da6"
     }),
@@ -1986,6 +2001,7 @@ function createWorkbookForMonthly(api, month, storeName) {
         storeName: "\u95e8\u5e97",
         salesTotal: "\u9500\u552e\u603b\u989d",
         actualReceived: "\u5b9e\u9645\u6536\u6b3e",
+        memberCardAmount: "\u4f1a\u5458\u5361\u6536\u5165",
         purchaseTotal: "\u8fdb\u8d27\u603b\u989d",
         profit: "\u9500\u552e\u51cf\u8fdb\u8d27"
       }),

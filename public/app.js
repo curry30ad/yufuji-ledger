@@ -208,7 +208,7 @@ function renderOverview() {
   const ledger = state.overviewBundle.ledger;
   const cards = [
     { label: "今日销售总额", value: yuan(ledger.salesTotal), sub: "营业额与单品销售分开记录" },
-    { label: "今日实际收款", value: yuan(ledger.actualReceived), sub: "现金、微信、支付宝" },
+    { label: "今日实际收款", value: yuan(ledger.actualReceived), sub: "现金、微信、支付宝、会员卡" },
     { label: "今日支出", value: yuan(ledger.expenseTotal), sub: "日常支出汇总" },
     { label: "简版利润", value: yuan(ledger.profit), sub: "销售总额减去当日支出" }
   ];
@@ -243,7 +243,7 @@ function fillLedgerForm() {
   }
   const ledger = state.ledgerBundle.ledger;
   const form = byId("ledgerForm");
-  ["salesTotal", "actualReceived", "cashAmount", "wechatAmount", "alipayAmount", "refundAmount", "roundingAmount"].forEach(function (key) {
+  ["salesTotal", "actualReceived", "cashAmount", "wechatAmount", "alipayAmount", "memberCardAmount", "refundAmount", "roundingAmount"].forEach(function (key) {
     form.elements[key].value = ledger[key];
   });
   form.elements.note.value = ledger.note || "";
@@ -364,9 +364,10 @@ function renderReports() {
   byId("dailyReport").innerHTML = '<div class="report-list">' + [
     ["销售总额", yuan(daily.salesTotal)],
     ["实际收款", yuan(daily.actualReceived)],
+    ["会员卡收入", yuan(daily.memberCardAmount)],
     ["支出合计", yuan(daily.expenseTotal)],
     ["简版利润", yuan(daily.profit)],
-    ["现金 / 微信 / 支付宝", yuan(daily.cashAmount) + " / " + yuan(daily.wechatAmount) + " / " + yuan(daily.alipayAmount)],
+    ["现金 / 微信 / 支付宝 / 会员卡", yuan(daily.cashAmount) + " / " + yuan(daily.wechatAmount) + " / " + yuan(daily.alipayAmount) + " / " + yuan(daily.memberCardAmount)],
     ["退款 / 抹零", yuan(daily.refundAmount) + " / " + yuan(daily.roundingAmount)]
   ].map(function (item) {
     return '<div class="report-item"><span>' + item[0] + "</span><strong>" + item[1] + "</strong></div>";
@@ -376,6 +377,7 @@ function renderReports() {
   const monthHtml = '<div class="report-list">' + [
     ["本月销售总额", yuan(monthly.totals.salesTotal)],
     ["本月实际收款", yuan(monthly.totals.actualReceived)],
+    ["本月会员卡收入", yuan(monthly.totals.memberCardAmount)],
     ["本月支出合计", yuan(monthly.totals.expenseTotal)],
     ["本月简版利润", yuan(monthly.totals.profit)],
     ["录入天数", String(monthly.days.length)],
@@ -872,6 +874,7 @@ async function submitLedgerForm(event) {
       cashAmount: form.elements.cashAmount.value,
       wechatAmount: form.elements.wechatAmount.value,
       alipayAmount: form.elements.alipayAmount.value,
+      memberCardAmount: form.elements.memberCardAmount.value,
       refundAmount: form.elements.refundAmount.value,
       roundingAmount: form.elements.roundingAmount.value,
       note: form.elements.note.value,
