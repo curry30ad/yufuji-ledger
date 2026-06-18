@@ -42,7 +42,7 @@ function ensurePurchaseProductsUi() {
         '    <label><span>商品名称</span><input name="name" required></label>',
         '    <label><span>默认单位</span><input name="defaultUnit" placeholder="例如：箱 / 斤 / 1"></label>',
         '    <label class="full"><span>别名 / 关键词</span><input name="keywords" placeholder="多个关键词可用逗号分隔"></label>',
-        '    <label><span>最近参考进价</span><input name="lastUnitCost" type="number" step="0.01" required></label>',
+        '    <label><span>最近参考进价</span><input name="lastUnitCost" type="number" step="0.01" placeholder="可留空，默认按 0 处理"></label>',
         '    <label><span>默认供应商</span><input name="lastSupplier" placeholder="可留空"></label>',
         '    <label><span>排序</span><input name="sortOrder" type="number" step="1" value="0"></label>',
         '    <label class="checkbox-row"><input name="isActive" type="checkbox" checked><span>启用进货商品</span></label>',
@@ -506,6 +506,25 @@ function renderPurchaseProducts() {
       item.isActive ? "启用" : "停用",
       String(item.sortOrder || 0),
       '<button class="ghost small-btn" data-purchase-product-edit="' + item.id + '">编辑</button>'
+    ];
+  });
+  byId("purchaseProductsTable").innerHTML = rows.length
+    ? tableHtml(["名称", "别名/关键词", "默认单位", "最近进价", "默认供应商", "状态", "排序", "操作"], rows)
+    : '<div class="empty">还没有进货商品。</div>';
+}
+
+function renderPurchaseProducts() {
+  const rows = state.purchaseProducts.map(function (item) {
+    return [
+      item.name,
+      item.keywords || "-",
+      item.defaultUnit || "-",
+      yuan(item.lastUnitCost),
+      item.lastSupplier || "-",
+      item.isActive ? "启用" : "停用",
+      String(item.sortOrder || 0),
+      '<button class="ghost small-btn" data-purchase-product-edit="' + item.id + '">编辑</button> ' +
+      '<button class="ghost small-btn" data-purchase-product-delete="' + item.id + '">删除</button>'
     ];
   });
   byId("purchaseProductsTable").innerHTML = rows.length
@@ -1201,20 +1220,38 @@ async function submitPurchaseProductForm(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const editingId = form.elements.id.value;
-  await request(editingId ? "/api/purchase-products/" + editingId : "/api/purchase-products", {
-    method: editingId ? "PUT" : "POST",
-    body: JSON.stringify({
-      name: form.elements.name.value,
-      keywords: form.elements.keywords.value,
-      defaultUnit: form.elements.defaultUnit.value,
-      lastUnitCost: form.elements.lastUnitCost.value,
-      lastSupplier: form.elements.lastSupplier.value,
-      sortOrder: form.elements.sortOrder.value,
-      isActive: form.elements.isActive.checked
-    })
-  });
-  resetPurchaseProductForm();
-  await loadDashboardData();
+  const name = String(form.elements.name.value || "").trim();
+  if (!name) {
+    showMessage("请先填写进货商品名称。");
+    return;
+  }
+  try {
+    const existing = !editingId
+      ? state.purchaseProducts.find(function (item) {
+          return String(item.name || "").trim() === name;
+        })
+      : null;
+    const targetId = editingId || (existing ? existing.id : "");
+    const response = await request(targetId ? "/api/purchase-products/" + targetId : "/api/purchase-products", {
+      method: targetId ? "PUT" : "POST",
+      body: JSON.stringify({
+        name: name,
+        keywords: form.elements.keywords.value,
+        defaultUnit: form.elements.defaultUnit.value,
+        lastUnitCost: form.elements.lastUnitCost.value || 0,
+        lastSupplier: form.elements.lastSupplier.value,
+        sortOrder: form.elements.sortOrder.value,
+        isActive: form.elements.isActive.checked
+      })
+    });
+    resetPurchaseProductForm();
+    await loadDashboardData();
+    if (response && response.mode === "updated" && !editingId) {
+      showMessage("已存在同名进货商品，系统已直接更新原记录。");
+    }
+  } catch (error) {
+    showMessage(error.message);
+  }
 }
 
 async function submitUserForm(event) {
@@ -1369,6 +1406,7 @@ async function handleBodyClick(event) {
   const expenseDeleteId = event.target.getAttribute("data-expense-delete");
   const productEditId = event.target.getAttribute("data-product-edit");
   const purchaseProductEditId = event.target.getAttribute("data-purchase-product-edit");
+  const purchaseProductDeleteId = event.target.getAttribute("data-purchase-product-delete");
   const userEditId = event.target.getAttribute("data-user-edit");
   const userResetId = event.target.getAttribute("data-user-reset");
   const userDeleteId = event.target.getAttribute("data-user-delete");
@@ -1420,6 +1458,16 @@ async function handleBodyClick(event) {
   }
   if (purchaseProductEditId) {
     fillPurchaseProductForm(purchaseProductEditId);
+    return;
+  }
+  if (purchaseProductDeleteId) {
+    const confirmed = window.confirm("删除后，这条进货商品将从进货商品库中移除，但不会删除历史进货记录。是否继续？");
+    if (!confirmed) {
+      return;
+    }
+    await request("/api/purchase-products/" + purchaseProductDeleteId, { method: "DELETE" });
+    resetPurchaseProductForm();
+    await loadDashboardData();
     return;
   }
   if (userEditId) {

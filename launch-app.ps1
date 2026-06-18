@@ -13,6 +13,34 @@ function Test-AppHealth {
   }
 }
 
+function Test-AppCompatibility {
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri "$url/api/purchase-products" -TimeoutSec 2 | Out-Null
+    return $true
+  } catch {
+    if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 401) {
+      return $true
+    }
+    return $false
+  }
+}
+
+function Stop-AppProcesses {
+  Get-CimInstance Win32_Process |
+    Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -match "server.js" } |
+    ForEach-Object {
+      try {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+      } catch {
+      }
+    }
+}
+
+if ((Test-AppHealth) -and (-not (Test-AppCompatibility))) {
+  Stop-AppProcesses
+  Start-Sleep -Milliseconds 800
+}
+
 if (-not (Test-AppHealth)) {
   Start-Process -FilePath "node" `
     -ArgumentList "`"$serverJs`"" `

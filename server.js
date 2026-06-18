@@ -1652,16 +1652,20 @@ function createApp(api) {
     if (!payload.name) {
       return res.status(400).json({ error: "Purchase product name is required." });
     }
-    const exists = api.one("SELECT id FROM purchase_products WHERE name = ?", [payload.name]);
-    if (exists) {
-      return res.status(409).json({ error: "A purchase product with this name already exists." });
-    }
     const now = new Date().toISOString();
+    const existing = api.one("SELECT id, created_at FROM purchase_products WHERE name = ?", [payload.name]);
+    if (existing) {
+      api.run(
+        "UPDATE purchase_products SET keywords = ?, default_unit = ?, last_unit_cost = ?, last_supplier = ?, is_active = ?, sort_order = ?, updated_at = ? WHERE id = ?",
+        [payload.keywords, payload.defaultUnit, payload.lastUnitCost, payload.lastSupplier, payload.isActive, payload.sortOrder, now, existing.id]
+      );
+      return res.json({ success: true, id: existing.id, mode: "updated" });
+    }
     api.run(
       "INSERT INTO purchase_products (name, keywords, default_unit, last_unit_cost, last_supplier, is_active, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [payload.name, payload.keywords, payload.defaultUnit, payload.lastUnitCost, payload.lastSupplier, payload.isActive, payload.sortOrder, now, now]
     );
-    res.json({ success: true });
+    res.json({ success: true, mode: "created" });
   });
 
   app.put("/api/purchase-products/:id", function updatePurchaseProduct(req, res) {
@@ -1686,6 +1690,19 @@ function createApp(api) {
       "UPDATE purchase_products SET name = ?, keywords = ?, default_unit = ?, last_unit_cost = ?, last_supplier = ?, is_active = ?, sort_order = ?, updated_at = ? WHERE id = ?",
       [payload.name, payload.keywords, payload.defaultUnit, payload.lastUnitCost, payload.lastSupplier, payload.isActive, payload.sortOrder, now, purchaseProductId]
     );
+    res.json({ success: true });
+  });
+
+  app.delete("/api/purchase-products/:id", function deletePurchaseProduct(req, res) {
+    if (!requireOwner(req, res)) {
+      return;
+    }
+    const purchaseProductId = intValue(req.params.id, 0);
+    const existing = api.one("SELECT * FROM purchase_products WHERE id = ?", [purchaseProductId]);
+    if (!existing) {
+      return res.status(404).json({ error: "Purchase product not found." });
+    }
+    api.run("DELETE FROM purchase_products WHERE id = ?", [purchaseProductId]);
     res.json({ success: true });
   });
 
