@@ -1,3 +1,7 @@
+param(
+  [string]$ReportPath
+)
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -11,11 +15,11 @@ $logOut = Join-Path $projectRoot "server.log"
 $logErr = Join-Path $projectRoot "server-error.log"
 $url = "http://127.0.0.1:3000"
 
-function Show-Info($message, $title = "于福记") {
+function Show-Info($message, $title = "Yufuji") {
   [System.Windows.Forms.MessageBox]::Show($message, $title, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
 }
 
-function Show-Error($message, $title = "于福记") {
+function Show-Error($message, $title = "Yufuji") {
   [System.Windows.Forms.MessageBox]::Show($message, $title, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
 }
 
@@ -39,8 +43,8 @@ function Start-AppServer {
 
 function Select-ReportFile {
   $dialog = New-Object System.Windows.Forms.OpenFileDialog
-  $dialog.Title = "选择要导入的月报"
-  $dialog.Filter = "Excel 文件 (*.xlsx)|*.xlsx"
+  $dialog.Title = "Select monthly report"
+  $dialog.Filter = "Excel files (*.xlsx)|*.xlsx"
   $dialog.InitialDirectory = [Environment]::GetFolderPath("UserProfile") + "\Downloads"
   $dialog.Multiselect = $false
   if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
@@ -49,17 +53,27 @@ function Select-ReportFile {
   return $dialog.FileName
 }
 
+function Resolve-ReportPath($candidatePath) {
+  if ($candidatePath -and (Test-Path -LiteralPath $candidatePath)) {
+    return $candidatePath
+  }
+  return Select-ReportFile
+}
+
 try {
   if (-not (Test-Path $dbPath)) {
-    throw "找不到数据库文件：$dbPath"
+    throw "Database file not found: $dbPath"
   }
   if (-not (Test-Path $scriptPath)) {
-    throw "找不到导入脚本：$scriptPath"
+    throw "Import script not found: $scriptPath"
   }
 
-  $reportPath = Select-ReportFile
-  if (-not $reportPath) {
+  $ReportPath = Resolve-ReportPath $ReportPath
+  if (-not $ReportPath) {
     exit 0
+  }
+  if (-not (Test-Path -LiteralPath $ReportPath)) {
+    throw "Report file not found: $ReportPath"
   }
 
   New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
@@ -71,7 +85,7 @@ try {
   $backupPath = Join-Path $backupDir ("ledger-before-monthly-import-" + $timestamp + ".sqlite")
   Copy-Item -LiteralPath $dbPath -Destination $backupPath -Force
 
-  $resultJson = & node $scriptPath $reportPath $dbPath 2>&1
+  $resultJson = & node $scriptPath $ReportPath $dbPath 2>&1
   if ($LASTEXITCODE -ne 0) {
     throw ($resultJson | Out-String).Trim()
   }
@@ -80,37 +94,37 @@ try {
   $monthLabel = [string]$result.months[0]
   $archiveYearDir = Join-Path $archiveRoot $monthLabel.Substring(0, 4)
   New-Item -ItemType Directory -Force -Path $archiveYearDir | Out-Null
-  $archivePath = Join-Path $archiveYearDir ([System.IO.Path]::GetFileName($reportPath))
-  Copy-Item -LiteralPath $reportPath -Destination $archivePath -Force
+  $archivePath = Join-Path $archiveYearDir ([System.IO.Path]::GetFileName($ReportPath))
+  Copy-Item -LiteralPath $ReportPath -Destination $archivePath -Force
 
   Start-AppServer
   Start-Sleep -Seconds 2
   Start-Process $url
 
-  $storesText = ($result.stores -join "、")
+  $storesText = ($result.stores -join ", ")
   $message = @"
-月报导入完成。
+Import complete.
 
-月份：$monthLabel
-门店：$storesText
-导入天数：$($result.importedRows)
-销售总额：$($result.totalSales)
-实际收款：$($result.totalActualReceived)
-支出合计：$($result.totalExpense)
+Month: $monthLabel
+Store: $storesText
+Days imported: $($result.importedRows)
+Sales total: $($result.totalSales)
+Actual received: $($result.totalActualReceived)
+Expense total: $($result.totalExpense)
 
-数据库备份：
+Database backup:
 $backupPath
 
-月报归档：
+Archived report:
 $archivePath
 "@
-  Show-Info $message "月报导入完成"
+  Show-Info $message "Monthly report imported"
 } catch {
   Start-AppServer
   $errorMessage = $_.Exception.Message
   if (-not $errorMessage) {
     $errorMessage = $_ | Out-String
   }
-  Show-Error $errorMessage "月报导入失败"
+  Show-Error $errorMessage "Monthly report import failed"
   exit 1
 }

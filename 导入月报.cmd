@@ -1,2 +1,2 @@
 @echo off
-powershell -ExecutionPolicy Bypass -File "%~dp0import-monthly-report.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0import-monthly-report.ps1" %*
