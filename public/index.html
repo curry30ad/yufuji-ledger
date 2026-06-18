@@ -170,7 +170,13 @@
               </div>
               <form id="purchaseForm" class="form-grid">
                 <input name="id" type="hidden">
-                <label><span>进货商品</span><input name="productName" required></label>
+                <label class="purchase-product-field">
+                  <span>进货商品</span>
+                  <div class="purchase-autocomplete">
+                    <input id="purchaseProductNameInput" name="productName" autocomplete="off" required>
+                    <div id="purchaseProductSuggestions" class="purchase-suggestions hidden"></div>
+                  </div>
+                </label>
                 <label><span>数量</span><input name="quantity" type="number" step="0.01" required></label>
                 <label><span>单位</span><input name="unit" placeholder="斤 / 个 / 箱"></label>
                 <label><span>进货单价</span><input name="unitCost" type="number" step="0.01" required></label>

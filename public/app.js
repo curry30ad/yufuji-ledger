@@ -9,6 +9,11 @@ const state = {
   ledgerBundle: null,
   purchases: [],
   monthlySummary: null,
+  purchaseAutocomplete: {
+    items: [],
+    highlightedIndex: -1,
+    open: false
+  },
   analytics: {
     metric: "salesTotal",
     dailyRange: 30,
@@ -199,6 +204,108 @@ function tableHtml(headers, rows) {
       return "<td>" + cell + "</td>";
     }).join("") + "</tr>";
   }).join("") + "</tbody></table>";
+}
+
+function splitProductKeywords(value) {
+  return String(value || "")
+    .split(/[\n,，;；]/)
+    .map(function (item) {
+      return String(item || "").trim();
+    })
+    .filter(Boolean);
+}
+
+function normalizeProductMatchText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getPurchaseProductMatches(query) {
+  const normalizedQuery = normalizeProductMatchText(query);
+  if (!normalizedQuery || normalizedQuery.length < 1) {
+    return [];
+  }
+  return state.products.filter(function (item) {
+    return item.isActive;
+  }).map(function (item) {
+    const normalizedName = normalizeProductMatchText(item.name);
+    const matchedKeywords = splitProductKeywords(item.keywords).filter(function (keyword) {
+      return normalizeProductMatchText(keyword).includes(normalizedQuery);
+    });
+    const nameMatched = normalizedName.includes(normalizedQuery);
+    if (!nameMatched && !matchedKeywords.length) {
+      return null;
+    }
+    return {
+      id: item.id,
+      name: item.name,
+      unit: item.unit,
+      matchedKeywords: matchedKeywords,
+      matchPriority: nameMatched ? 0 : 1
+    };
+  }).filter(Boolean).sort(function (a, b) {
+    if (a.matchPriority !== b.matchPriority) {
+      return a.matchPriority - b.matchPriority;
+    }
+    return 0;
+  }).slice(0, 8);
+}
+
+function renderPurchaseProductSuggestions() {
+  const target = byId("purchaseProductSuggestions");
+  if (!target) {
+    return;
+  }
+  if (!state.purchaseAutocomplete.open) {
+    target.classList.add("hidden");
+    target.innerHTML = "";
+    return;
+  }
+  if (!state.purchaseAutocomplete.items.length) {
+    target.innerHTML = '<div class="purchase-suggestion-empty">无匹配商品</div>';
+    target.classList.remove("hidden");
+    return;
+  }
+  target.innerHTML = state.purchaseAutocomplete.items.map(function (item, index) {
+    const detail = item.matchedKeywords.length
+      ? "关键词：" + item.matchedKeywords.slice(0, 2).join("、")
+      : "商品名称匹配";
+    return '<button type="button" class="purchase-suggestion-btn' + (index === state.purchaseAutocomplete.highlightedIndex ? " active" : "") + '" data-purchase-suggestion="' + index + '">' +
+      "<strong>" + item.name + '</strong><span>' + detail + (item.unit ? " · " + item.unit : "") + "</span></button>";
+  }).join("");
+  target.classList.remove("hidden");
+}
+
+function closePurchaseProductSuggestions() {
+  state.purchaseAutocomplete.items = [];
+  state.purchaseAutocomplete.highlightedIndex = -1;
+  state.purchaseAutocomplete.open = false;
+  renderPurchaseProductSuggestions();
+}
+
+function updatePurchaseProductSuggestions(query, preferredIndex) {
+  const items = getPurchaseProductMatches(query);
+  state.purchaseAutocomplete.items = items;
+  state.purchaseAutocomplete.open = Boolean(query && normalizeProductMatchText(query).length >= 1);
+  if (!state.purchaseAutocomplete.open) {
+    state.purchaseAutocomplete.highlightedIndex = -1;
+  } else if (!items.length) {
+    state.purchaseAutocomplete.highlightedIndex = -1;
+  } else if (typeof preferredIndex === "number" && preferredIndex >= 0 && preferredIndex < items.length) {
+    state.purchaseAutocomplete.highlightedIndex = preferredIndex;
+  } else {
+    state.purchaseAutocomplete.highlightedIndex = 0;
+  }
+  renderPurchaseProductSuggestions();
+}
+
+function applyPurchaseProductSuggestion(index) {
+  const item = state.purchaseAutocomplete.items[index];
+  const input = byId("purchaseProductNameInput");
+  if (!item || !input) {
+    return;
+  }
+  input.value = item.name;
+  closePurchaseProductSuggestions();
 }
 
 function renderOverview() {
@@ -645,6 +752,7 @@ function resetPurchaseForm() {
   form.reset();
   form.elements.id.value = "";
   form.elements.unit.value = "1";
+  closePurchaseProductSuggestions();
 }
 
 function resetExpenseForm() {
@@ -718,6 +826,7 @@ function fillPurchaseForm(purchaseId) {
   form.elements.totalCost.value = item.totalCost;
   form.elements.supplier.value = item.supplier || "";
   form.elements.note.value = item.note || "";
+  closePurchaseProductSuggestions();
   setSection("purchasesSection");
 }
 
@@ -788,6 +897,12 @@ async function loadDashboardData() {
   state.products = results[0].items;
   state.ledgerBundle = results[1];
   state.purchases = results[2].items || [];
+  var purchaseProductInput = byId("purchaseProductNameInput");
+  if (purchaseProductInput && normalizeProductMatchText(purchaseProductInput.value)) {
+    updatePurchaseProductSuggestions(purchaseProductInput.value, state.purchaseAutocomplete.highlightedIndex);
+  } else {
+    closePurchaseProductSuggestions();
+  }
   state.overviewBundle = isOwner() ? results[3] : results[1];
   state.monthlySummary = isOwner() ? results[4] : null;
   state.analytics.data = isOwner() ? results[5] : null;
@@ -854,6 +969,9 @@ function logout() {
   state.ledgerBundle = null;
   state.purchases = [];
   state.monthlySummary = null;
+  state.purchaseAutocomplete.items = [];
+  state.purchaseAutocomplete.highlightedIndex = -1;
+  state.purchaseAutocomplete.open = false;
   state.analytics.data = null;
   state.receiptScan = null;
   localStorage.removeItem("ledger_token");
@@ -1045,7 +1163,64 @@ async function importReceiptItems() {
   showMessage("小票识别结果已经导入到当天单品销售。");
 }
 
+function handlePurchaseProductInput(event) {
+  updatePurchaseProductSuggestions(event.target.value);
+}
+
+function handlePurchaseProductFocus(event) {
+  if (normalizeProductMatchText(event.target.value)) {
+    updatePurchaseProductSuggestions(event.target.value);
+  }
+}
+
+function handlePurchaseProductKeydown(event) {
+  if (!state.purchaseAutocomplete.open) {
+    return;
+  }
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    if (!state.purchaseAutocomplete.items.length) {
+      return;
+    }
+    var nextIndex = state.purchaseAutocomplete.highlightedIndex + 1;
+    if (nextIndex >= state.purchaseAutocomplete.items.length) {
+      nextIndex = 0;
+    }
+    updatePurchaseProductSuggestions(event.currentTarget.value, nextIndex);
+    return;
+  }
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    if (!state.purchaseAutocomplete.items.length) {
+      return;
+    }
+    var previousIndex = state.purchaseAutocomplete.highlightedIndex - 1;
+    if (previousIndex < 0) {
+      previousIndex = state.purchaseAutocomplete.items.length - 1;
+    }
+    updatePurchaseProductSuggestions(event.currentTarget.value, previousIndex);
+    return;
+  }
+  if (event.key === "Enter" && state.purchaseAutocomplete.highlightedIndex >= 0) {
+    event.preventDefault();
+    applyPurchaseProductSuggestion(state.purchaseAutocomplete.highlightedIndex);
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closePurchaseProductSuggestions();
+  }
+}
+
 async function handleBodyClick(event) {
+  const purchaseSuggestionIndex = event.target.getAttribute("data-purchase-suggestion");
+  if (purchaseSuggestionIndex !== null) {
+    applyPurchaseProductSuggestion(Number(purchaseSuggestionIndex));
+    return;
+  }
+  if (!event.target.closest(".purchase-autocomplete")) {
+    closePurchaseProductSuggestions();
+  }
   const receiptRecommendRow = event.target.getAttribute("data-receipt-recommend-row");
   const receiptRecommendProduct = event.target.getAttribute("data-receipt-recommend-product");
   if (receiptRecommendRow && receiptRecommendProduct) {
@@ -1173,6 +1348,9 @@ async function bootstrap() {
   byId("ledgerForm").addEventListener("submit", submitLedgerForm);
   byId("saleForm").addEventListener("submit", submitSaleForm);
   byId("purchaseForm").addEventListener("submit", submitPurchaseForm);
+  byId("purchaseProductNameInput").addEventListener("input", handlePurchaseProductInput);
+  byId("purchaseProductNameInput").addEventListener("focus", handlePurchaseProductFocus);
+  byId("purchaseProductNameInput").addEventListener("keydown", handlePurchaseProductKeydown);
   byId("receiptForm").addEventListener("submit", submitReceiptScan);
   byId("expenseForm").addEventListener("submit", submitExpenseForm);
   byId("productForm").addEventListener("submit", submitProductForm);
