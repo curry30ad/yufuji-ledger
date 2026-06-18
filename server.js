@@ -1075,8 +1075,118 @@ function getMonthlyPurchaseSummary(api, month, storeName) {
   }, 0);
   return {
     totalCost: money(totalCost),
-    entryCount: entries.length
+    entryCount: entries.length,
+    productCount: Array.from(new Set(entries.map(function mapItem(item) {
+      return String(item.productName || "").trim();
+    }).filter(Boolean))).length
   };
+}
+
+function getMonthlyPurchaseProductSummary(api, month, storeName) {
+  const entries = getMonthlyPurchaseEntries(api, month, storeName);
+  const grouped = {};
+
+  entries.forEach(function groupEntry(item) {
+    const productName = String(item.productName || "").trim();
+    if (!productName) {
+      return;
+    }
+    if (!grouped[productName]) {
+      grouped[productName] = {
+        productName: productName,
+        totalQuantity: 0,
+        unitSet: new Set(),
+        totalCost: 0,
+        entryCount: 0,
+        supplierSet: new Set(),
+        lastUnitCost: 0,
+        lastPurchaseDate: item.date || "",
+        lastStoreName: item.storeName || ""
+      };
+    }
+    const current = grouped[productName];
+    current.totalQuantity = money(current.totalQuantity + money(item.quantity));
+    current.totalCost = money(current.totalCost + money(item.totalCost));
+    current.entryCount += 1;
+    if (item.unit) {
+      current.unitSet.add(String(item.unit).trim());
+    }
+    if (item.supplier) {
+      current.supplierSet.add(String(item.supplier).trim());
+    }
+    const currentStamp = String(item.updatedAt || item.createdAt || item.date || "");
+    const latestStamp = String(current._latestStamp || "");
+    if (!latestStamp || currentStamp >= latestStamp) {
+      current._latestStamp = currentStamp;
+      current.lastUnitCost = money(item.unitCost);
+      current.lastPurchaseDate = item.date || "";
+      current.lastStoreName = item.storeName || "";
+    }
+  });
+
+  return Object.keys(grouped).sort(function sortNames(a, b) {
+    return a.localeCompare(b, "zh-CN");
+  }).map(function mapGroup(key) {
+    const item = grouped[key];
+    const units = Array.from(item.unitSet);
+    const suppliers = Array.from(item.supplierSet);
+    return {
+      productName: item.productName,
+      totalQuantity: money(item.totalQuantity),
+      unit: units.length === 1 ? units[0] : units.join(" / "),
+      totalCost: money(item.totalCost),
+      entryCount: item.entryCount,
+      averageCost: item.entryCount ? money(item.totalCost / item.entryCount) : 0,
+      lastUnitCost: money(item.lastUnitCost),
+      supplierSummary: suppliers.join(" / "),
+      lastPurchaseDate: item.lastPurchaseDate,
+      lastStoreName: item.lastStoreName
+    };
+  });
+}
+
+function getMonthlyPurchaseDailySummary(api, month, storeName) {
+  const entries = getMonthlyPurchaseEntries(api, month, storeName);
+  const grouped = {};
+
+  entries.forEach(function groupEntry(item) {
+    const date = item.date || "";
+    if (!date) {
+      return;
+    }
+    if (!grouped[date]) {
+      grouped[date] = {
+        date: date,
+        storeSet: new Set(),
+        productSet: new Set(),
+        entryCount: 0,
+        totalQuantity: 0,
+        totalCost: 0
+      };
+    }
+    const current = grouped[date];
+    current.entryCount += 1;
+    current.totalQuantity = money(current.totalQuantity + money(item.quantity));
+    current.totalCost = money(current.totalCost + money(item.totalCost));
+    if (item.storeName) {
+      current.storeSet.add(String(item.storeName).trim());
+    }
+    if (item.productName) {
+      current.productSet.add(String(item.productName).trim());
+    }
+  });
+
+  return Object.keys(grouped).sort().map(function mapGroup(key) {
+    const item = grouped[key];
+    return {
+      date: item.date,
+      storeName: Array.from(item.storeSet).join(" / "),
+      productCount: item.productSet.size,
+      entryCount: item.entryCount,
+      totalQuantity: money(item.totalQuantity),
+      totalCost: money(item.totalCost)
+    };
+  });
 }
 
 function getMonthlyStoreSalesSummary(api, month) {
@@ -1276,6 +1386,8 @@ function getMonthlySummary(api, month, storeName) {
   );
   const monthlyPurchases = getMonthlyPurchaseEntries(api, month, normalizedStoreName);
   const purchaseSummary = getMonthlyPurchaseSummary(api, month, normalizedStoreName);
+  const purchaseProductSummary = getMonthlyPurchaseProductSummary(api, month, normalizedStoreName);
+  const purchaseDailySummary = getMonthlyPurchaseDailySummary(api, month, normalizedStoreName);
 
   return {
     month: month,
@@ -1289,6 +1401,8 @@ function getMonthlySummary(api, month, storeName) {
     days: days,
     purchases: monthlyPurchases,
     purchaseSummary: purchaseSummary,
+    purchaseProductSummary: purchaseProductSummary,
+    purchaseDailySummary: purchaseDailySummary,
     storeSalesSummary: normalizedStoreName ? [] : getMonthlyStoreSalesSummary(api, month),
     productSummary: getProductSalesSummary(api, fromDate, toDate, normalizedStoreName),
     topProducts: getTopProducts(api, fromDate, toDate, 10, normalizedStoreName)
@@ -2217,9 +2331,38 @@ function createWorkbookForMonthly(api, month, storeName) {
     workbook,
     makeExportSheet([summary.purchaseSummary], {
       totalCost: "\u672c\u6708\u8fdb\u8d27\u603b\u989d",
-      entryCount: "\u672c\u6708\u8fdb\u8d27\u7b14\u6570"
+      entryCount: "\u672c\u6708\u8fdb\u8d27\u7b14\u6570",
+      productCount: "\u672c\u6708\u8fdb\u8d27\u5546\u54c1\u79cd\u6570"
     }),
     "\u8fdb\u8d27\u6c47\u603b"
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    makeExportSheet(summary.purchaseProductSummary, {
+      productName: "\u8fdb\u8d27\u5546\u54c1",
+      totalQuantity: "\u6708\u7d2f\u8ba1\u6570\u91cf",
+      unit: "\u5355\u4f4d",
+      totalCost: "\u6708\u7d2f\u8ba1\u8fdb\u8d27\u989d",
+      entryCount: "\u8fdb\u8d27\u7b14\u6570",
+      averageCost: "\u5355\u7b14\u5e73\u5747\u989d",
+      lastUnitCost: "\u6700\u8fd1\u8fdb\u4ef7",
+      supplierSummary: "\u4f9b\u5e94\u5546",
+      lastPurchaseDate: "\u6700\u8fd1\u8fdb\u8d27\u65e5\u671f",
+      lastStoreName: "\u6700\u8fd1\u8fdb\u8d27\u95e8\u5e97"
+    }),
+    "\u8fdb\u8d27\u5546\u54c1\u6708\u6c47\u603b"
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    makeExportSheet(summary.purchaseDailySummary, {
+      date: "\u65e5\u671f",
+      storeName: "\u95e8\u5e97",
+      productCount: "\u5546\u54c1\u79cd\u6570",
+      entryCount: "\u8fdb\u8d27\u7b14\u6570",
+      totalQuantity: "\u5f53\u65e5\u7d2f\u8ba1\u6570\u91cf",
+      totalCost: "\u5f53\u65e5\u8fdb\u8d27\u603b\u989d"
+    }),
+    "\u6bcf\u65e5\u8fdb\u8d27\u60c5\u51b5"
   );
   if (summary.storeSalesSummary && summary.storeSalesSummary.length) {
     XLSX.utils.book_append_sheet(

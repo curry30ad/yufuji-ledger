@@ -620,6 +620,104 @@ function renderReports() {
   }
 }
 
+function renderReports() {
+  if (!state.monthlySummary || !isOwner()) {
+    return;
+  }
+  const daily = state.ledgerBundle.ledger;
+  byId("dailyReport").innerHTML = '<div class="report-list">' + [
+    ["销售总额", yuan(daily.salesTotal)],
+    ["实际收款", yuan(daily.actualReceived)],
+    ["会员卡收入", yuan(daily.memberCardAmount)],
+    ["支出合计", yuan(daily.expenseTotal)],
+    ["简版利润", yuan(daily.profit)],
+    ["现金 / 微信 / 支付宝 / 会员卡", yuan(daily.cashAmount) + " / " + yuan(daily.wechatAmount) + " / " + yuan(daily.alipayAmount) + " / " + yuan(daily.memberCardAmount)],
+    ["退款 / 抹零", yuan(daily.refundAmount) + " / " + yuan(daily.roundingAmount)]
+  ].map(function (item) {
+    return '<div class="report-item"><span>' + item[0] + "</span><strong>" + item[1] + "</strong></div>";
+  }).join("") + "</div>";
+
+  const monthly = state.monthlySummary;
+  const monthHtml = '<div class="report-list">' + [
+    ["本月销售总额", yuan(monthly.totals.salesTotal)],
+    ["本月实际收款", yuan(monthly.totals.actualReceived)],
+    ["本月会员卡收入", yuan(monthly.totals.memberCardAmount)],
+    ["本月支出合计", yuan(monthly.totals.expenseTotal)],
+    ["本月简版利润", yuan(monthly.totals.profit)],
+    ["录入天数", String(monthly.days.length)],
+    ["本月进货总额", yuan((monthly.purchaseSummary && monthly.purchaseSummary.totalCost) || 0)],
+    ["本月进货笔数", String((monthly.purchaseSummary && monthly.purchaseSummary.entryCount) || 0)],
+    ["本月进货商品种数", String((monthly.purchaseSummary && monthly.purchaseSummary.productCount) || 0)]
+  ].map(function (item) {
+    return '<div class="report-item"><span>' + item[0] + "</span><strong>" + item[1] + "</strong></div>";
+  }).join("") + "</div>";
+
+  const topHtml = monthly.topProducts.length
+    ? tableHtml(
+        ["热销商品", "累计销量", "累计金额"],
+        monthly.topProducts.map(function (item) {
+          return [item.name, item.totalQuantity + item.unit, yuan(item.totalAmount)];
+        })
+      )
+    : '<div class="empty">本月还没有单品排行数据。</div>';
+
+  const purchaseProductSummaryHtml = monthly.purchaseProductSummary && monthly.purchaseProductSummary.length
+    ? tableHtml(
+        ["进货商品", "月累计数量", "单位", "月累计进货额", "进货笔数", "最近进价", "供应商"],
+        monthly.purchaseProductSummary.map(function (item) {
+          return [
+            item.productName,
+            String(item.totalQuantity),
+            item.unit || "-",
+            yuan(item.totalCost),
+            String(item.entryCount),
+            yuan(item.lastUnitCost),
+            item.supplierSummary || "-"
+          ];
+        })
+      )
+    : '<div class="empty">本月还没有进货商品汇总。</div>';
+
+  const purchaseDailySummaryHtml = monthly.purchaseDailySummary && monthly.purchaseDailySummary.length
+    ? tableHtml(
+        ["日期", "门店", "商品种数", "进货笔数", "当日累计数量", "当日进货总额"],
+        monthly.purchaseDailySummary.map(function (item) {
+          return [
+            item.date,
+            item.storeName || "-",
+            String(item.productCount),
+            String(item.entryCount),
+            String(item.totalQuantity),
+            yuan(item.totalCost)
+          ];
+        })
+      )
+    : '<div class="empty">本月还没有每日进货情况。</div>';
+
+  const purchaseHtml = monthly.purchases && monthly.purchases.length
+    ? tableHtml(
+        ["日期", "门店", "进货商品", "数量", "进货总额", "供应商"],
+        monthly.purchases.map(function (item) {
+          return [item.date, item.storeName, item.productName, item.quantity + (item.unit ? "（" + item.unit + "）" : ""), yuan(item.totalCost), item.supplier || "-"];
+        })
+      )
+    : '<div class="empty">本月还没有进货明细。</div>';
+
+  byId("monthlyReport").innerHTML = monthHtml + topHtml + purchaseProductSummaryHtml + purchaseDailySummaryHtml + purchaseHtml;
+
+  const storeTarget = byId("storeSalesSummary");
+  if (storeTarget) {
+    storeTarget.innerHTML = monthly.storeSalesSummary && monthly.storeSalesSummary.length
+      ? tableHtml(
+          ["门店", "销售总额", "实际收款", "进货总额", "销售减进货"],
+          monthly.storeSalesSummary.map(function (item) {
+            return [item.storeName, yuan(item.salesTotal), yuan(item.actualReceived), yuan(item.purchaseTotal), yuan(item.profit)];
+          })
+        )
+      : '<div class="empty">当前是单门店视图，或暂时没有门店经营汇总数据。</div>';
+  }
+}
+
 function renderSummaryCards(targetId, summary) {
   const cards = [
     { label: "当前周期", value: yuan(summary.currentTotal) },
