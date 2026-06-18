@@ -5,6 +5,7 @@ const state = {
   stores: [],
   selectedStore: "",
   products: [],
+  purchaseProducts: [],
   overviewBundle: null,
   ledgerBundle: null,
   purchases: [],
@@ -24,6 +25,52 @@ const state = {
 
 function byId(id) {
   return document.getElementById(id);
+}
+
+function ensurePurchaseProductsUi() {
+  if (!byId("purchaseProductsSection")) {
+    var usersSection = byId("usersSection");
+    if (usersSection && usersSection.parentNode) {
+      var section = document.createElement("section");
+      section.id = "purchaseProductsSection";
+      section.className = "page-section hidden owner-only";
+      section.innerHTML = [
+        '<article class="panel">',
+        '  <div class="panel-head"><h3>进货商品管理</h3></div>',
+        '  <form id="purchaseProductForm" class="form-grid">',
+        '    <input name="id" type="hidden">',
+        '    <label><span>商品名称</span><input name="name" required></label>',
+        '    <label><span>默认单位</span><input name="defaultUnit" placeholder="例如：箱 / 斤 / 1"></label>',
+        '    <label class="full"><span>别名 / 关键词</span><input name="keywords" placeholder="多个关键词可用逗号分隔"></label>',
+        '    <label><span>最近参考进价</span><input name="lastUnitCost" type="number" step="0.01" required></label>',
+        '    <label><span>默认供应商</span><input name="lastSupplier" placeholder="可留空"></label>',
+        '    <label><span>排序</span><input name="sortOrder" type="number" step="1" value="0"></label>',
+        '    <label class="checkbox-row"><input name="isActive" type="checkbox" checked><span>启用进货商品</span></label>',
+        '    <div class="full form-actions">',
+        '      <button type="submit" class="primary">保存进货商品</button>',
+        '      <button type="button" id="resetPurchaseProductBtn" class="ghost">清空表单</button>',
+        '    </div>',
+        '  </form>',
+        '</article>',
+        '<article class="panel">',
+        '  <div class="panel-head"><h3>进货商品列表</h3></div>',
+        '  <div id="purchaseProductsTable"></div>',
+        '</article>'
+      ].join("");
+      usersSection.parentNode.insertBefore(section, usersSection);
+    }
+  }
+
+  if (!document.querySelector('.nav-btn[data-section="purchaseProductsSection"]')) {
+    var usersButton = document.querySelector('.nav-btn[data-section="usersSection"]');
+    if (usersButton && usersButton.parentNode) {
+      var button = document.createElement("button");
+      button.className = "nav-btn owner-only";
+      button.dataset.section = "purchaseProductsSection";
+      button.textContent = "进货商品管理";
+      usersButton.parentNode.insertBefore(button, usersButton);
+    }
+  }
 }
 
 function isOwner() {
@@ -174,7 +221,7 @@ function updateOwnerVisibility() {
   });
   const activeButton = document.querySelector(".nav-btn.active");
   const hiddenSection = activeButton && activeButton.classList.contains("hidden");
-  if (!owner && (!activeButton || hiddenSection || ["overviewSection", "reportsSection", "analyticsSection", "productsSection", "usersSection"].includes(activeButton.dataset.section))) {
+  if (!owner && (!activeButton || hiddenSection || ["overviewSection", "reportsSection", "analyticsSection", "productsSection", "purchaseProductsSection", "usersSection"].includes(activeButton.dataset.section))) {
     setSection("ledgerSection");
   }
 }
@@ -224,7 +271,7 @@ function getPurchaseProductMatches(query) {
   if (!normalizedQuery || normalizedQuery.length < 1) {
     return [];
   }
-  return state.products.filter(function (item) {
+  return state.purchaseProducts.filter(function (item) {
     return item.isActive;
   }).map(function (item) {
     const normalizedName = normalizeProductMatchText(item.name);
@@ -238,7 +285,9 @@ function getPurchaseProductMatches(query) {
     return {
       id: item.id,
       name: item.name,
-      unit: item.unit,
+      unit: item.defaultUnit || "",
+      defaultUnit: item.defaultUnit || "",
+      lastUnitCost: item.lastUnitCost,
       matchedKeywords: matchedKeywords,
       matchPriority: nameMatched ? 0 : 1
     };
@@ -246,7 +295,7 @@ function getPurchaseProductMatches(query) {
     if (a.matchPriority !== b.matchPriority) {
       return a.matchPriority - b.matchPriority;
     }
-    return 0;
+    return String(a.name).localeCompare(String(b.name), "zh-CN");
   }).slice(0, 8);
 }
 
@@ -304,7 +353,14 @@ function applyPurchaseProductSuggestion(index) {
   if (!item || !input) {
     return;
   }
+  const form = byId("purchaseForm");
   input.value = item.name;
+  if (form && form.elements.unit) {
+    form.elements.unit.value = item.defaultUnit || "1";
+  }
+  if (form && form.elements.unitCost) {
+    form.elements.unitCost.value = item.lastUnitCost ? String(item.lastUnitCost) : "";
+  }
   closePurchaseProductSuggestions();
 }
 
@@ -437,6 +493,24 @@ function renderProducts() {
   byId("productsTable").innerHTML = rows.length
     ? tableHtml(["名称", "别名/关键词", "销售方式", "单位", "默认单价", "状态", "操作"], rows)
     : '<div class="empty">还没有商品。</div>';
+}
+
+function renderPurchaseProducts() {
+  const rows = state.purchaseProducts.map(function (item) {
+    return [
+      item.name,
+      item.keywords || "-",
+      item.defaultUnit || "-",
+      yuan(item.lastUnitCost),
+      item.lastSupplier || "-",
+      item.isActive ? "启用" : "停用",
+      String(item.sortOrder || 0),
+      '<button class="ghost small-btn" data-purchase-product-edit="' + item.id + '">编辑</button>'
+    ];
+  });
+  byId("purchaseProductsTable").innerHTML = rows.length
+    ? tableHtml(["名称", "别名/关键词", "默认单位", "最近进价", "默认供应商", "状态", "排序", "操作"], rows)
+    : '<div class="empty">还没有进货商品。</div>';
 }
 
 function renderUsers(items) {
@@ -740,6 +814,14 @@ function resetProductForm() {
   form.elements.isActive.checked = true;
 }
 
+function resetPurchaseProductForm() {
+  const form = byId("purchaseProductForm");
+  form.reset();
+  form.elements.id.value = "";
+  form.elements.isActive.checked = true;
+  form.elements.sortOrder.value = "0";
+}
+
 function resetSaleForm() {
   const form = byId("saleForm");
   form.reset();
@@ -792,6 +874,25 @@ function fillProductForm(productId) {
   form.elements.sortOrder.value = item.sortOrder;
   form.elements.isActive.checked = item.isActive;
   setSection("productsSection");
+}
+
+function fillPurchaseProductForm(purchaseProductId) {
+  const item = state.purchaseProducts.find(function (product) {
+    return String(product.id) === String(purchaseProductId);
+  });
+  if (!item) {
+    return;
+  }
+  const form = byId("purchaseProductForm");
+  form.elements.id.value = item.id;
+  form.elements.name.value = item.name;
+  form.elements.keywords.value = item.keywords || "";
+  form.elements.defaultUnit.value = item.defaultUnit || "";
+  form.elements.lastUnitCost.value = item.lastUnitCost;
+  form.elements.lastSupplier.value = item.lastSupplier || "";
+  form.elements.sortOrder.value = item.sortOrder || 0;
+  form.elements.isActive.checked = item.isActive;
+  setSection("purchaseProductsSection");
 }
 
 function fillSaleForm(saleId) {
@@ -877,6 +978,7 @@ async function loadDashboardData() {
   const storeQuery = getStoreQuery();
   const requests = [
     request("/api/products?includeInactive=" + (isOwner() ? "true" : "false")),
+    request("/api/purchase-products?includeInactive=" + (isOwner() ? "true" : "false")),
     request("/api/ledger/" + date + (storeQuery ? "?" + storeQuery : "")),
     request("/api/purchases/" + date + (storeQuery ? "?" + storeQuery : ""))
   ];
@@ -895,17 +997,18 @@ async function loadDashboardData() {
   }
   const results = await Promise.all(requests);
   state.products = results[0].items;
-  state.ledgerBundle = results[1];
-  state.purchases = results[2].items || [];
+  state.purchaseProducts = results[1].items || [];
+  state.ledgerBundle = results[2];
+  state.purchases = results[3].items || [];
   var purchaseProductInput = byId("purchaseProductNameInput");
   if (purchaseProductInput && normalizeProductMatchText(purchaseProductInput.value)) {
     updatePurchaseProductSuggestions(purchaseProductInput.value, state.purchaseAutocomplete.highlightedIndex);
   } else {
     closePurchaseProductSuggestions();
   }
-  state.overviewBundle = isOwner() ? results[3] : results[1];
-  state.monthlySummary = isOwner() ? results[4] : null;
-  state.analytics.data = isOwner() ? results[5] : null;
+  state.overviewBundle = isOwner() ? results[4] : results[2];
+  state.monthlySummary = isOwner() ? results[5] : null;
+  state.analytics.data = isOwner() ? results[6] : null;
   updateSaleProductOptions();
   fillLedgerForm();
   renderSales();
@@ -915,6 +1018,7 @@ async function loadDashboardData() {
   if (isOwner()) {
     renderOverview();
     renderProducts();
+    renderPurchaseProducts();
     renderReports();
     renderAnalytics();
   }
@@ -965,6 +1069,7 @@ function logout() {
   state.stores = [];
   state.selectedStore = "";
   state.products = [];
+  state.purchaseProducts = [];
   state.overviewBundle = null;
   state.ledgerBundle = null;
   state.purchases = [];
@@ -1089,6 +1194,26 @@ async function submitProductForm(event) {
     })
   });
   resetProductForm();
+  await loadDashboardData();
+}
+
+async function submitPurchaseProductForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const editingId = form.elements.id.value;
+  await request(editingId ? "/api/purchase-products/" + editingId : "/api/purchase-products", {
+    method: editingId ? "PUT" : "POST",
+    body: JSON.stringify({
+      name: form.elements.name.value,
+      keywords: form.elements.keywords.value,
+      defaultUnit: form.elements.defaultUnit.value,
+      lastUnitCost: form.elements.lastUnitCost.value,
+      lastSupplier: form.elements.lastSupplier.value,
+      sortOrder: form.elements.sortOrder.value,
+      isActive: form.elements.isActive.checked
+    })
+  });
+  resetPurchaseProductForm();
   await loadDashboardData();
 }
 
@@ -1243,6 +1368,7 @@ async function handleBodyClick(event) {
   const expenseEditId = event.target.getAttribute("data-expense-edit");
   const expenseDeleteId = event.target.getAttribute("data-expense-delete");
   const productEditId = event.target.getAttribute("data-product-edit");
+  const purchaseProductEditId = event.target.getAttribute("data-purchase-product-edit");
   const userEditId = event.target.getAttribute("data-user-edit");
   const userResetId = event.target.getAttribute("data-user-reset");
   const userDeleteId = event.target.getAttribute("data-user-delete");
@@ -1292,6 +1418,10 @@ async function handleBodyClick(event) {
     fillProductForm(productEditId);
     return;
   }
+  if (purchaseProductEditId) {
+    fillPurchaseProductForm(purchaseProductEditId);
+    return;
+  }
   if (userEditId) {
     fillUserForm(userEditId);
     return;
@@ -1328,6 +1458,7 @@ function handleBodyChange(event) {
 }
 
 async function bootstrap() {
+  ensurePurchaseProductsUi();
   byId("loginForm").addEventListener("submit", handleLogin);
   byId("logoutBtn").addEventListener("click", logout);
   byId("refreshBtn").addEventListener("click", async function () {
@@ -1354,14 +1485,17 @@ async function bootstrap() {
   byId("receiptForm").addEventListener("submit", submitReceiptScan);
   byId("expenseForm").addEventListener("submit", submitExpenseForm);
   byId("productForm").addEventListener("submit", submitProductForm);
+  byId("purchaseProductForm").addEventListener("submit", submitPurchaseProductForm);
   byId("userForm").addEventListener("submit", submitUserForm);
 
   byId("resetProductBtn").addEventListener("click", resetProductForm);
+  byId("resetPurchaseProductBtn").addEventListener("click", resetPurchaseProductForm);
   byId("resetSaleBtn").addEventListener("click", resetSaleForm);
   byId("resetPurchaseBtn").addEventListener("click", resetPurchaseForm);
   byId("resetExpenseBtn").addEventListener("click", resetExpenseForm);
   byId("resetUserBtn").addEventListener("click", resetUserForm);
   resetPurchaseForm();
+  resetPurchaseProductForm();
 
   byId("activeDate").addEventListener("change", function () {
     state.receiptScan = null;

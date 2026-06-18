@@ -255,6 +255,19 @@ function createSchema(api) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS purchase_products (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      keywords TEXT NOT NULL DEFAULT '',
+      default_unit TEXT NOT NULL DEFAULT '',
+      last_unit_cost REAL NOT NULL DEFAULT 0,
+      last_supplier TEXT NOT NULL DEFAULT '',
+      is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS daily_ledgers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ledger_date TEXT NOT NULL,
@@ -333,6 +346,132 @@ function ensureColumn(api, tableName, definition) {
   if (!tableHasColumn(api, tableName, columnName)) {
     api.raw.exec("ALTER TABLE " + tableName + " ADD COLUMN " + definition);
   }
+}
+
+function ensurePurchaseProductSeeded(api) {
+  const seededRow = api.one("SELECT id FROM purchase_products LIMIT 1");
+  if (seededRow) {
+    return;
+  }
+  const rows = api.all(`
+    SELECT p.product_name, p.unit, p.unit_cost, p.supplier, p.created_at, p.updated_at
+    FROM purchase_entries p
+    INNER JOIN (
+      SELECT product_name, MAX(COALESCE(updated_at, created_at)) AS latest_at
+      FROM purchase_entries
+      WHERE TRIM(product_name) <> ''
+      GROUP BY product_name
+    ) latest
+      ON latest.product_name = p.product_name
+     AND latest.latest_at = COALESCE(p.updated_at, p.created_at)
+    WHERE TRIM(p.product_name) <> ''
+    ORDER BY p.product_name ASC, p.id DESC
+  `);
+  const insertedNames = new Set();
+  rows.forEach(function seedRow(row) {
+    const productName = String(row.product_name || "").trim();
+    if (!productName || insertedNames.has(productName)) {
+      return;
+    }
+    insertedNames.add(productName);
+    const createdAt = row.created_at || row.updated_at || new Date().toISOString();
+    const updatedAt = row.updated_at || row.created_at || createdAt;
+    api.run(
+      "INSERT INTO purchase_products (name, keywords, default_unit, last_unit_cost, last_supplier, is_active, sort_order, created_at, updated_at) VALUES (?, '', ?, ?, ?, 1, 0, ?, ?)",
+      [
+        productName,
+        String(row.unit || "").trim(),
+        money(row.unit_cost),
+        String(row.supplier || "").trim(),
+        createdAt,
+        updatedAt
+      ]
+    );
+  });
+}
+
+function rebuildPurchaseProductByName(api, productName) {
+  const normalizedName = String(productName || "").trim();
+  if (!normalizedName) {
+    return;
+  }
+  const latestEntry = api.one(
+    "SELECT * FROM purchase_entries WHERE product_name = ? ORDER BY purchase_date DESC, COALESCE(updated_at, created_at) DESC, id DESC LIMIT 1",
+    [normalizedName]
+  );
+  if (!latestEntry) {
+    api.run("DELETE FROM purchase_products WHERE name = ?", [normalizedName]);
+    return;
+  }
+  const existing = api.one("SELECT * FROM purchase_products WHERE name = ?", [normalizedName]);
+  const createdAt = existing ? existing.created_at : (latestEntry.created_at || latestEntry.updated_at || new Date().toISOString());
+  const updatedAt = latestEntry.updated_at || latestEntry.created_at || new Date().toISOString();
+  const keywords = existing ? String(existing.keywords || "") : "";
+  const isActive = existing ? intValue(existing.is_active, 1) : 1;
+  const sortOrder = existing ? intValue(existing.sort_order, 0) : 0;
+
+  if (existing) {
+    api.run(
+      "UPDATE purchase_products SET keywords = ?, default_unit = ?, last_unit_cost = ?, last_supplier = ?, is_active = ?, sort_order = ?, updated_at = ? WHERE id = ?",
+      [
+        keywords,
+        String(latestEntry.unit || "").trim(),
+        money(latestEntry.unit_cost),
+        String(latestEntry.supplier || "").trim(),
+        isActive,
+        sortOrder,
+        updatedAt,
+        existing.id
+      ]
+    );
+  } else {
+    api.run(
+      "INSERT INTO purchase_products (name, keywords, default_unit, last_unit_cost, last_supplier, is_active, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        normalizedName,
+        keywords,
+        String(latestEntry.unit || "").trim(),
+        money(latestEntry.unit_cost),
+        String(latestEntry.supplier || "").trim(),
+        isActive,
+        sortOrder,
+        createdAt,
+        updatedAt
+      ]
+    );
+  }
+}
+
+function getPurchaseProducts(api, includeInactive) {
+  return api.all(
+    "SELECT * FROM purchase_products " + (includeInactive ? "" : "WHERE is_active = 1 ") + "ORDER BY sort_order ASC, id ASC"
+  ).map(function mapPurchaseProduct(row) {
+    return {
+      id: row.id,
+      name: row.name,
+      keywords: row.keywords || "",
+      defaultUnit: row.default_unit || "",
+      lastUnitCost: money(row.last_unit_cost),
+      lastSupplier: row.last_supplier || "",
+      isActive: Boolean(row.is_active),
+      sortOrder: row.sort_order,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  });
+}
+
+function normalizePurchaseProductPayload(body) {
+  const source = body || {};
+  return {
+    name: String(source.name || "").trim(),
+    keywords: String(source.keywords || "").trim(),
+    defaultUnit: String(source.defaultUnit || "").trim(),
+    lastUnitCost: money(source.lastUnitCost),
+    lastSupplier: String(source.lastSupplier || "").trim(),
+    isActive: source.isActive === false ? 0 : 1,
+    sortOrder: intValue(source.sortOrder, 0)
+  };
 }
 
 function ensureDailyLedgerCompositeKey(api) {
@@ -436,12 +575,19 @@ function mergeLegacyDailyLedgerStore(api, fromStoreName, toStoreName) {
 function migrateSchema(api) {
   ensureColumn(api, "users", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "products", "keywords TEXT NOT NULL DEFAULT ''");
+  ensureColumn(api, "purchase_products", "keywords TEXT NOT NULL DEFAULT ''");
+  ensureColumn(api, "purchase_products", "default_unit TEXT NOT NULL DEFAULT ''");
+  ensureColumn(api, "purchase_products", "last_unit_cost REAL NOT NULL DEFAULT 0");
+  ensureColumn(api, "purchase_products", "last_supplier TEXT NOT NULL DEFAULT ''");
+  ensureColumn(api, "purchase_products", "is_active INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(api, "purchase_products", "sort_order INTEGER NOT NULL DEFAULT 0");
   ensureColumn(api, "sale_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "expense_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "purchase_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "purchase_entries", "supplier TEXT NOT NULL DEFAULT ''");
   ensureDailyLedgerCompositeKey(api);
   ensureColumn(api, "daily_ledgers", "member_card_amount REAL NOT NULL DEFAULT 0");
+  api.raw.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_products_name ON purchase_products(name)");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_sale_entries_date_store ON sale_entries(sale_date, store_name)");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_expense_entries_date_store ON expense_entries(expense_date, store_name)");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_purchase_entries_date_store ON purchase_entries(purchase_date, store_name)");
@@ -459,6 +605,7 @@ function migrateSchema(api) {
     api.run("UPDATE purchase_entries SET store_name = ? WHERE store_name = ?", [item.to, item.from]);
   });
   api.run("UPDATE users SET name = ?, store_name = ? WHERE username = 'owner'", [OWNER_DISPLAY_NAME, DEFAULT_STORE_NAME]);
+  ensurePurchaseProductSeeded(api);
 }
 
 function persistNow(api) {
@@ -1492,6 +1639,56 @@ function createApp(api) {
     res.json({ success: true });
   });
 
+  app.get("/api/purchase-products", function listPurchaseProducts(req, res) {
+    const includeInactive = req.user.role === "owner" && req.query.includeInactive === "true";
+    res.json({ items: getPurchaseProducts(api, includeInactive) });
+  });
+
+  app.post("/api/purchase-products", function createPurchaseProduct(req, res) {
+    if (!requireOwner(req, res)) {
+      return;
+    }
+    const payload = normalizePurchaseProductPayload(req.body);
+    if (!payload.name) {
+      return res.status(400).json({ error: "Purchase product name is required." });
+    }
+    const exists = api.one("SELECT id FROM purchase_products WHERE name = ?", [payload.name]);
+    if (exists) {
+      return res.status(409).json({ error: "A purchase product with this name already exists." });
+    }
+    const now = new Date().toISOString();
+    api.run(
+      "INSERT INTO purchase_products (name, keywords, default_unit, last_unit_cost, last_supplier, is_active, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [payload.name, payload.keywords, payload.defaultUnit, payload.lastUnitCost, payload.lastSupplier, payload.isActive, payload.sortOrder, now, now]
+    );
+    res.json({ success: true });
+  });
+
+  app.put("/api/purchase-products/:id", function updatePurchaseProduct(req, res) {
+    if (!requireOwner(req, res)) {
+      return;
+    }
+    const purchaseProductId = intValue(req.params.id, 0);
+    const existing = api.one("SELECT * FROM purchase_products WHERE id = ?", [purchaseProductId]);
+    if (!existing) {
+      return res.status(404).json({ error: "Purchase product not found." });
+    }
+    const payload = normalizePurchaseProductPayload(req.body);
+    if (!payload.name) {
+      return res.status(400).json({ error: "Purchase product name is required." });
+    }
+    const duplicated = api.one("SELECT id FROM purchase_products WHERE name = ? AND id <> ?", [payload.name, purchaseProductId]);
+    if (duplicated) {
+      return res.status(409).json({ error: "A purchase product with this name already exists." });
+    }
+    const now = new Date().toISOString();
+    api.run(
+      "UPDATE purchase_products SET name = ?, keywords = ?, default_unit = ?, last_unit_cost = ?, last_supplier = ?, is_active = ?, sort_order = ?, updated_at = ? WHERE id = ?",
+      [payload.name, payload.keywords, payload.defaultUnit, payload.lastUnitCost, payload.lastSupplier, payload.isActive, payload.sortOrder, now, purchaseProductId]
+    );
+    res.json({ success: true });
+  });
+
   app.get("/api/ledger/:date", function getLedger(req, res) {
     const storeName = resolveRequestedStoreName(req, req.query.storeName, true);
     const bundle = getLedgerBundle(api, req.params.date, storeName);
@@ -1688,11 +1885,17 @@ function createApp(api) {
       "INSERT INTO purchase_entries (purchase_date, store_name, product_name, quantity, unit, unit_cost, total_cost, supplier, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [date, storeName, productName, quantity, unit, unitCost, totalCost, String(body.supplier || ""), String(body.note || ""), req.user.id, now, now]
     );
+    rebuildPurchaseProductByName(api, productName);
     res.json({ success: true });
   });
 
   app.put("/api/purchases/:id", function updatePurchase(req, res) {
     const body = req.body || {};
+    const purchaseId = intValue(req.params.id, 0);
+    const existing = api.one("SELECT * FROM purchase_entries WHERE id = ?", [purchaseId]);
+    if (!existing) {
+      return res.status(404).json({ error: "Purchase record not found." });
+    }
     const productName = String(body.productName || "").trim();
     const quantity = money(body.quantity);
     const unit = String(body.unit || "").trim();
@@ -1706,13 +1909,20 @@ function createApp(api) {
     const now = new Date().toISOString();
     api.run(
       "UPDATE purchase_entries SET product_name = ?, quantity = ?, unit = ?, unit_cost = ?, total_cost = ?, supplier = ?, note = ?, updated_at = ? WHERE id = ?",
-      [productName, quantity, unit, unitCost, totalCost, String(body.supplier || ""), String(body.note || ""), now, intValue(req.params.id, 0)]
+      [productName, quantity, unit, unitCost, totalCost, String(body.supplier || ""), String(body.note || ""), now, purchaseId]
     );
+    rebuildPurchaseProductByName(api, existing.product_name);
+    rebuildPurchaseProductByName(api, productName);
     res.json({ success: true });
   });
 
   app.delete("/api/purchases/:id", function deletePurchase(req, res) {
-    api.run("DELETE FROM purchase_entries WHERE id = ?", [intValue(req.params.id, 0)]);
+    const purchaseId = intValue(req.params.id, 0);
+    const existing = api.one("SELECT * FROM purchase_entries WHERE id = ?", [purchaseId]);
+    api.run("DELETE FROM purchase_entries WHERE id = ?", [purchaseId]);
+    if (existing) {
+      rebuildPurchaseProductByName(api, existing.product_name);
+    }
     res.json({ success: true });
   });
 
