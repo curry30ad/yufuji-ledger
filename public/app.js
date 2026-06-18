@@ -301,7 +301,7 @@ function renderPurchases() {
   const rows = state.purchases.map(function (item) {
     return [
       item.productName,
-      item.quantity + (item.unit || ""),
+      item.quantity + (item.unit ? "（" + item.unit + "）" : ""),
       yuan(item.unitCost),
       yuan(item.totalCost),
       item.supplier || "-",
@@ -400,7 +400,7 @@ function renderReports() {
     ? tableHtml(
         ["日期", "门店", "进货商品", "数量", "进货总额", "供应商"],
         monthly.purchases.slice(0, 12).map(function (item) {
-          return [item.date, item.storeName, item.productName, item.quantity + (item.unit || ""), yuan(item.totalCost), item.supplier || "-"];
+          return [item.date, item.storeName, item.productName, item.quantity + (item.unit ? "（" + item.unit + "）" : ""), yuan(item.totalCost), item.supplier || "-"];
         })
       )
     : '<div class="empty">本月还没有进货明细。</div>';
@@ -644,6 +644,7 @@ function resetPurchaseForm() {
   const form = byId("purchaseForm");
   form.reset();
   form.elements.id.value = "";
+  form.elements.unit.value = "1";
 }
 
 function resetExpenseForm() {
@@ -913,13 +914,14 @@ async function submitPurchaseForm(event) {
   }
   const form = event.currentTarget;
   const editingId = form.elements.id.value;
+  const unitText = form.elements.unit.value.trim();
   await request(editingId ? "/api/purchases/" + editingId : "/api/purchases", {
     method: editingId ? "PUT" : "POST",
     body: JSON.stringify({
       date: byId("activeDate").value,
       productName: form.elements.productName.value,
       quantity: form.elements.quantity.value,
-      unit: form.elements.unit.value,
+      unit: unitText,
       unitCost: form.elements.unitCost.value,
       totalCost: form.elements.totalCost.value,
       supplier: form.elements.supplier.value,
@@ -1181,6 +1183,7 @@ async function bootstrap() {
   byId("resetPurchaseBtn").addEventListener("click", resetPurchaseForm);
   byId("resetExpenseBtn").addEventListener("click", resetExpenseForm);
   byId("resetUserBtn").addEventListener("click", resetUserForm);
+  resetPurchaseForm();
 
   byId("activeDate").addEventListener("change", function () {
     state.receiptScan = null;
