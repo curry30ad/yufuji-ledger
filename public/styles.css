@@ -214,6 +214,21 @@ button {
   gap: 16px;
 }
 
+.compact-cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.overview-groups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.embedded-toolbar {
+  margin-bottom: 16px;
+  box-shadow: none;
+}
+
 .metric-card,
 .panel {
   background: rgba(255, 253, 248, 0.94);
@@ -500,6 +515,8 @@ th {
   }
 
   .card-grid,
+  .compact-cards,
+  .overview-groups,
   .double-grid,
   .form-grid {
     grid-template-columns: 1fr;

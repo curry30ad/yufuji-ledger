@@ -76,7 +76,44 @@
           </div>
 
           <section id="overviewSection" class="page-section hidden owner-only">
-            <div class="card-grid" id="overviewCards"></div>
+            <div class="overview-groups">
+              <article class="panel">
+                <div class="panel-head">
+                  <h3>今日摘要</h3>
+                </div>
+                <div class="card-grid compact-cards" id="overviewDayCards"></div>
+              </article>
+              <article class="panel">
+                <div class="panel-head">
+                  <h3>本月摘要</h3>
+                </div>
+                <div class="card-grid compact-cards" id="overviewMonthCards"></div>
+              </article>
+              <article class="panel">
+                <div class="panel-head">
+                  <h3>本年摘要</h3>
+                </div>
+                <div class="card-grid compact-cards" id="overviewYearCards"></div>
+              </article>
+            </div>
+            <article class="panel">
+              <div class="panel-head">
+                <h3>自定义区间查询</h3>
+              </div>
+              <form id="overviewRangeForm" class="toolbar embedded-toolbar">
+                <label>
+                  <span>开始日期</span>
+                  <input id="overviewRangeStart" type="date" required>
+                </label>
+                <label>
+                  <span>结束日期</span>
+                  <input id="overviewRangeEnd" type="date" required>
+                </label>
+                <button type="submit" class="primary">查询区间经营数据</button>
+              </form>
+              <div class="card-grid compact-cards" id="overviewRangeCards"></div>
+              <div id="overviewRangeMeta" class="muted"></div>
+            </article>
             <div class="double-grid">
               <article class="panel">
                 <div class="panel-head">

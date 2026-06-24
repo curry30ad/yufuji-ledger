@@ -7,6 +7,7 @@ const state = {
   products: [],
   purchaseProducts: [],
   overviewBundle: null,
+  overviewRange: null,
   ledgerBundle: null,
   purchases: [],
   monthlySummary: null,
@@ -398,6 +399,90 @@ function renderOverview() {
         return '<div class="snapshot-item"><span>' + expenseTypeMap[item.expenseType] + (item.note ? " · " + item.note : "") + "</span><strong>" + yuan(item.amount) + "</strong></div>";
       }).join("") + "</div>"
     : '<div class="empty">当天还没有支出记录。</div>';
+}
+
+function renderOverview() {
+  if (!state.overviewBundle || !isOwner()) {
+    return;
+  }
+  const ledger = state.overviewBundle.ledger;
+  const overviewMetrics = state.overviewBundle.overviewMetrics || {};
+  const rangeMetrics = state.overviewRange || null;
+  const activeMonth = byId("activeMonth").value;
+  const monthMetrics = overviewMetrics.month && overviewMetrics.month.totals
+    ? overviewMetrics.month
+    : { key: activeMonth, salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, profit: 0 } };
+  const yearMetrics = overviewMetrics.year && overviewMetrics.year.totals
+    ? overviewMetrics.year
+    : { key: String(activeMonth || "").slice(0, 4), salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, profit: 0 } };
+  const dayCards = [
+    { label: "\u4eca\u65e5\u9500\u552e\u603b\u989d", value: yuan(ledger.salesTotal), sub: "\u4ee5\u5f53\u5929\u5feb\u901f\u8bb0\u8d26\u4e3a\u51c6" },
+    { label: "\u4eca\u65e5\u5b9e\u9645\u6536\u6b3e", value: yuan(ledger.actualReceived), sub: "\u73b0\u91d1\u3001\u5fae\u4fe1\u3001\u652f\u4ed8\u5b9d\u3001\u4f1a\u5458\u5361" },
+    { label: "\u4eca\u65e5\u4f1a\u5458\u5361\u6536\u5165", value: yuan(ledger.memberCardAmount), sub: "\u5f53\u5929\u5df2\u8bb0\u5f55\u7684\u4f1a\u5458\u5361\u6536\u5165" },
+    { label: "\u4eca\u65e5\u652f\u51fa", value: yuan(ledger.expenseTotal), sub: "\u5f53\u5929\u652f\u51fa\u5408\u8ba1" },
+    { label: "\u4eca\u65e5\u7b80\u7248\u5229\u6da6", value: yuan(ledger.profit), sub: "\u4eca\u65e5\u9500\u552e\u603b\u989d - \u4eca\u65e5\u652f\u51fa" }
+  ];
+  const monthCards = [
+    { label: "\u672c\u6708\u6709\u9500\u552e\u5929\u6570", value: String(monthMetrics.salesDays), sub: "\u53ea\u7edf\u8ba1\u9500\u552e\u603b\u989d\u5927\u4e8e0\u7684\u5929" },
+    { label: "\u672c\u6708\u9500\u552e\u603b\u989d", value: yuan(monthMetrics.totals.salesTotal), sub: "\u6309" + monthMetrics.key + "\u9500\u552e\u603b\u989d\u6c47\u603b" },
+    { label: "\u672c\u6708\u5e73\u5747\u9500\u552e\u989d", value: yuan(monthMetrics.totals.averageSales), sub: "\u6309" + monthMetrics.key + "\u7edf\u8ba1" },
+    { label: "\u672c\u6708\u4f1a\u5458\u5361\u6536\u5165", value: yuan(monthMetrics.totals.memberCardAmount), sub: "\u6309" + monthMetrics.key + "\u4f1a\u5458\u5361\u53e3\u5f84\u6c47\u603b" },
+    { label: "\u672c\u6708\u603b\u8fdb\u8d27\u82b1\u8d39", value: yuan(monthMetrics.totals.purchaseTotal), sub: "\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
+    { label: "\u672c\u6708\u5229\u6da6", value: yuan(monthMetrics.totals.profit), sub: "\u9500\u552e - \u8fdb\u8d27 - \u652f\u51fa" }
+  ];
+  const yearCards = [
+    { label: "\u672c\u5e74\u6709\u9500\u552e\u5929\u6570", value: String(yearMetrics.salesDays), sub: "\u53ea\u7edf\u8ba1\u9500\u552e\u603b\u989d\u5927\u4e8e0\u7684\u5929" },
+    { label: "\u672c\u5e74\u9500\u552e\u603b\u989d", value: yuan(yearMetrics.totals.salesTotal), sub: "\u6309" + yearMetrics.key + "\u5e74\u9500\u552e\u603b\u989d\u6c47\u603b" },
+    { label: "\u672c\u5e74\u5e73\u5747\u9500\u552e\u989d", value: yuan(yearMetrics.totals.averageSales), sub: "\u6309" + yearMetrics.key + "\u5e74\u7edf\u8ba1" },
+    { label: "\u672c\u5e74\u4f1a\u5458\u5361\u6536\u5165", value: yuan(yearMetrics.totals.memberCardAmount), sub: "\u6309" + yearMetrics.key + "\u5e74\u4f1a\u5458\u5361\u53e3\u5f84\u6c47\u603b" },
+    { label: "\u672c\u5e74\u603b\u8fdb\u8d27\u82b1\u8d39", value: yuan(yearMetrics.totals.purchaseTotal), sub: "\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
+    { label: "\u672c\u5e74\u5229\u6da6", value: yuan(yearMetrics.totals.profit), sub: "\u9500\u552e - \u8fdb\u8d27 - \u652f\u51fa" }
+  ];
+  function renderMetricCards(targetId, cards) {
+    byId(targetId).innerHTML = cards.map(function (item) {
+      return '<article class="metric-card"><div class="label">' + item.label + '</div><div class="value">' + item.value + '</div><div class="sub">' + item.sub + "</div></article>";
+    }).join("");
+  }
+  renderMetricCards("overviewDayCards", dayCards);
+  renderMetricCards("overviewMonthCards", monthCards);
+  renderMetricCards("overviewYearCards", yearCards);
+  const rangeCards = rangeMetrics
+      ? [
+        { label: "\u533a\u95f4\u9500\u552e\u603b\u989d", value: yuan(rangeMetrics.totals.salesTotal), sub: "\u4ece" + rangeMetrics.fromDate + "\u5230" + rangeMetrics.toDate },
+        { label: "\u533a\u95f4\u4f1a\u5458\u5361\u6536\u5165", value: yuan(rangeMetrics.totals.memberCardAmount), sub: "\u533a\u95f4\u5185\u4f1a\u5458\u5361\u6536\u5165\u6c47\u603b" },
+        { label: "\u533a\u95f4\u652f\u51fa\u603b\u989d", value: yuan(rangeMetrics.totals.expenseTotal), sub: "\u533a\u95f4\u5185\u652f\u51fa\u8bb0\u5f55\u6c47\u603b" },
+        { label: "\u533a\u95f4\u8fdb\u8d27\u603b\u989d", value: yuan(rangeMetrics.totals.purchaseTotal), sub: "\u533a\u95f4\u5185\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
+        { label: "\u533a\u95f4\u5e73\u5747\u9500\u552e\u989d", value: yuan(rangeMetrics.totals.averageSales), sub: rangeMetrics.salesDays + "\u4e2a\u6709\u9500\u552e\u65e5" },
+        { label: "\u533a\u95f4\u5229\u6da6", value: yuan(rangeMetrics.totals.profit), sub: "\u9500\u552e - \u8fdb\u8d27 - \u652f\u51fa" },
+        { label: "\u533a\u95f4\u5b9e\u9645\u6536\u6b3e", value: yuan(rangeMetrics.totals.actualReceived), sub: "\u6309\u8bb0\u8d26\u5df2\u5f55\u5165\u7684\u5b9e\u6536\u53e3\u5f84" }
+      ]
+    : [];
+  renderMetricCards("overviewRangeCards", rangeCards);
+  byId("overviewRangeMeta").textContent = rangeMetrics
+    ? ("查询区间：" + rangeMetrics.fromDate + " 至 " + rangeMetrics.toDate + "，有销售数据 " + rangeMetrics.salesDays + " 天。")
+    : "";
+  if (rangeMetrics) {
+    byId("overviewRangeMeta").textContent = "\u67e5\u8be2\u533a\u95f4\uff1a" + rangeMetrics.fromDate + " \u81f3 " + rangeMetrics.toDate + "\uff0c\u6709\u9500\u552e\u6570\u636e " + rangeMetrics.salesDays + " \u5929\u3002";
+  }
+  byId("topProductsTable").innerHTML = state.overviewBundle.topProducts.length
+    ? tableHtml(
+        ["\u5546\u54c1", "\u9500\u91cf", "\u91d1\u989d"],
+        state.overviewBundle.topProducts.map(function (item) {
+          return [
+            item.name + ' <span class="pill">' + (item.saleMode === "weight" ? "\u6309\u91cd\u91cf" : "\u6309\u4efd\u6570") + "</span>",
+            item.totalQuantity + item.unit,
+            yuan(item.totalAmount)
+          ];
+        })
+      )
+    : '<div class="empty">\u5f53\u5929\u8fd8\u6ca1\u6709\u5355\u54c1\u9500\u552e\u6570\u636e\u3002</div>';
+
+  const expenseTypeMap = { purchase: "\u8fdb\u8d27\u652f\u51fa", daily: "\u65e5\u5e38\u652f\u51fa" };
+  byId("expenseSnapshot").innerHTML = state.overviewBundle.expenses.length
+    ? '<div class="snapshot-list">' + state.overviewBundle.expenses.map(function (item) {
+        return '<div class="snapshot-item"><span>' + expenseTypeMap[item.expenseType] + (item.note ? " | " + item.note : "") + "</span><strong>" + yuan(item.amount) + "</strong></div>";
+      }).join("") + "</div>"
+    : '<div class="empty">\u5f53\u5929\u8fd8\u6ca1\u6709\u652f\u51fa\u8bb0\u5f55\u3002</div>';
 }
 
 function fillLedgerForm() {
@@ -1090,6 +1175,17 @@ async function loadUsersIfNeeded() {
   renderStoreFilter();
 }
 
+function getOverviewRangeQuery() {
+  const start = byId("overviewRangeStart");
+  const end = byId("overviewRangeEnd");
+  if (!start || !end) {
+    return "fromDate=" + encodeURIComponent(currentMonth() + "-01") + "&toDate=" + encodeURIComponent(currentDate());
+  }
+  const fromDate = start.value || currentMonth() + "-01";
+  const toDate = end.value || currentDate();
+  return "fromDate=" + encodeURIComponent(fromDate) + "&toDate=" + encodeURIComponent(toDate);
+}
+
 async function loadDashboardData() {
   const date = byId("activeDate").value;
   const storeQuery = getStoreQuery();
@@ -1100,8 +1196,9 @@ async function loadDashboardData() {
     request("/api/purchases/" + date + (storeQuery ? "?" + storeQuery : ""))
   ];
   if (isOwner()) {
-    requests.push(request("/api/ledger/" + date + "?storeName=all"));
+    requests.push(request("/api/ledger/" + date + "?storeName=all&month=" + encodeURIComponent(byId("activeMonth").value)));
     requests.push(request("/api/reports/monthly?month=" + byId("activeMonth").value + (storeQuery ? "&" + storeQuery : "")));
+    requests.push(request("/api/overview-range?" + getOverviewRangeQuery() + (storeQuery ? "&" + storeQuery : "")));
     requests.push(
       request(
         "/api/analytics?metric=" + state.analytics.metric +
@@ -1125,7 +1222,8 @@ async function loadDashboardData() {
   }
   state.overviewBundle = isOwner() ? results[4] : results[2];
   state.monthlySummary = isOwner() ? results[5] : null;
-  state.analytics.data = isOwner() ? results[6] : null;
+  state.overviewRange = isOwner() ? results[6] : null;
+  state.analytics.data = isOwner() ? results[7] : null;
   updateSaleProductOptions();
   fillLedgerForm();
   renderSales();
@@ -1169,6 +1267,10 @@ async function afterLogin() {
   byId("activeDate").value = currentDate();
   byId("activeMonth").value = currentMonth();
   if (isOwner()) {
+    byId("overviewRangeStart").value = currentMonth() + "-01";
+    byId("overviewRangeEnd").value = currentDate();
+  }
+  if (isOwner()) {
     await loadUsersIfNeeded();
   }
   updateOwnerVisibility();
@@ -1188,6 +1290,7 @@ function logout() {
   state.products = [];
   state.purchaseProducts = [];
   state.overviewBundle = null;
+  state.overviewRange = null;
   state.ledgerBundle = null;
   state.purchases = [];
   state.monthlySummary = null;
@@ -1369,6 +1472,24 @@ async function submitUserForm(event) {
   resetUserForm();
   await loadUsersIfNeeded();
   showMessage("店员账号已保存。");
+}
+
+async function submitOverviewRangeForm(event) {
+  event.preventDefault();
+  if (!isOwner()) {
+    return;
+  }
+  const start = byId("overviewRangeStart").value;
+  const end = byId("overviewRangeEnd").value;
+  if (!start || !end) {
+    showMessage("\u8bf7\u5148\u9009\u62e9\u5f00\u59cb\u65e5\u671f\u548c\u7ed3\u675f\u65e5\u671f\u3002");
+    return;
+  }
+  if (start > end) {
+    showMessage("\u5f00\u59cb\u65e5\u671f\u4e0d\u80fd\u665a\u4e8e\u7ed3\u675f\u65e5\u671f\u3002");
+    return;
+  }
+  await loadDashboardData();
 }
 
 async function submitReceiptScan(event) {
@@ -1633,6 +1754,7 @@ async function bootstrap() {
   byId("productForm").addEventListener("submit", submitProductForm);
   byId("purchaseProductForm").addEventListener("submit", submitPurchaseProductForm);
   byId("userForm").addEventListener("submit", submitUserForm);
+  byId("overviewRangeForm").addEventListener("submit", submitOverviewRangeForm);
 
   byId("resetProductBtn").addEventListener("click", resetProductForm);
   byId("resetPurchaseProductBtn").addEventListener("click", resetPurchaseProductForm);
@@ -1650,6 +1772,7 @@ async function bootstrap() {
   });
   byId("activeMonth").addEventListener("change", function () {
     if (isOwner()) {
+      byId("overviewRangeStart").value = byId("activeMonth").value + "-01";
       loadDashboardData();
     }
   });

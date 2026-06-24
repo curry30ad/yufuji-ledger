@@ -58,6 +58,10 @@ function normalizeStoreName(value) {
   return text || DEFAULT_STORE_NAME;
 }
 
+function isPlaceholderStoreName(value) {
+  return /^store\d+$/i.test(String(value || "").trim());
+}
+
 function monthText() {
   return todayText().slice(0, 7);
 }
@@ -696,7 +700,9 @@ function getAvailableStores(api) {
   `);
   const values = rows.map(function mapStore(row) {
     return normalizeStoreName(row.store_name);
-  }).filter(Boolean);
+  }).filter(function filterStoreName(storeName) {
+    return Boolean(storeName) && !isPlaceholderStoreName(storeName);
+  });
   const unique = Array.from(new Set(values));
   if (!unique.length) {
     unique.push(DEFAULT_STORE_NAME);
@@ -1340,6 +1346,90 @@ function getDailySummary(api, date, storeName) {
   return getLedgerBundle(api, date, storeName).ledger;
 }
 
+function getRangeOverview(api, fromDate, toDate, storeName) {
+  const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
+  const ledgerFilter = buildStoreFilter("store_name", normalizedStoreName);
+  const ledgerRows = api.all(
+    "SELECT ledger_date, ROUND(SUM(sales_total), 2) AS sales_total, ROUND(SUM(actual_received), 2) AS actual_received, ROUND(SUM(member_card_amount), 2) AS member_card_amount FROM daily_ledgers WHERE ledger_date BETWEEN ? AND ?" + ledgerFilter.clause + " GROUP BY ledger_date ORDER BY ledger_date ASC",
+    [fromDate, toDate].concat(ledgerFilter.params)
+  );
+  const expenseFilter = buildStoreFilter("store_name", normalizedStoreName);
+  const expenseRows = api.all(
+    "SELECT expense_date, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ?" + expenseFilter.clause + " GROUP BY expense_date",
+    [fromDate, toDate].concat(expenseFilter.params)
+  );
+  const purchaseFilter = buildStoreFilter("store_name", normalizedStoreName);
+  const purchaseRows = api.all(
+    "SELECT purchase_date, ROUND(SUM(total_cost), 2) AS total FROM purchase_entries WHERE purchase_date BETWEEN ? AND ?" + purchaseFilter.clause + " GROUP BY purchase_date",
+    [fromDate, toDate].concat(purchaseFilter.params)
+  );
+  const expenseMap = {};
+  const purchaseMap = {};
+  expenseRows.forEach(function buildExpenseMap(row) {
+    expenseMap[row.expense_date] = money(row.total);
+  });
+  purchaseRows.forEach(function buildPurchaseMap(row) {
+    purchaseMap[row.purchase_date] = money(row.total);
+  });
+
+  const days = ledgerRows.map(function mapDay(row) {
+    const salesTotal = money(row.sales_total);
+    const expenseTotal = money(expenseMap[row.ledger_date] || 0);
+    const purchaseTotal = money(purchaseMap[row.ledger_date] || 0);
+    return {
+      date: row.ledger_date,
+      salesTotal: salesTotal,
+      actualReceived: money(row.actual_received),
+      memberCardAmount: money(row.member_card_amount),
+      expenseTotal: expenseTotal,
+      purchaseTotal: purchaseTotal,
+      profit: money(salesTotal - purchaseTotal - expenseTotal)
+    };
+  });
+
+  const totals = days.reduce(
+    function reduceTotals(acc, day) {
+      acc.salesTotal += day.salesTotal;
+      acc.actualReceived += day.actualReceived;
+      acc.memberCardAmount += day.memberCardAmount;
+      acc.expenseTotal += day.expenseTotal;
+      acc.purchaseTotal += day.purchaseTotal;
+      acc.profit += day.profit;
+      return acc;
+    },
+    { salesTotal: 0, actualReceived: 0, memberCardAmount: 0, expenseTotal: 0, purchaseTotal: 0, profit: 0 }
+  );
+  const salesDays = days.filter(function filterSalesDay(day) {
+    return day.salesTotal > 0;
+  }).length;
+
+  return {
+    fromDate: fromDate,
+    toDate: toDate,
+    salesDays: salesDays,
+    totals: {
+      salesTotal: money(totals.salesTotal),
+      actualReceived: money(totals.actualReceived),
+      memberCardAmount: money(totals.memberCardAmount),
+      expenseTotal: money(totals.expenseTotal),
+      purchaseTotal: money(totals.purchaseTotal),
+      averageSales: salesDays ? money(totals.salesTotal / salesDays) : 0,
+      profit: money(totals.profit)
+    },
+    days: days
+  };
+}
+
+function getOverviewMetrics(api, date, month, storeName) {
+  const monthKey = /^\d{4}-\d{2}$/.test(String(month || "")) ? String(month) : String(date || todayText()).slice(0, 7);
+  const yearKey = monthKey.slice(0, 4);
+  return {
+    day: getLedgerBundle(api, date, storeName).ledger,
+    month: Object.assign({ key: monthKey }, getRangeOverview(api, monthKey + "-01", monthKey + "-31", storeName)),
+    year: Object.assign({ key: yearKey }, getRangeOverview(api, yearKey + "-01-01", yearKey + "-12-31", storeName))
+  };
+}
+
 function getMonthlySummary(api, month, storeName) {
   const fromDate = month + "-01";
   const toDate = month + "-31";
@@ -1826,6 +1916,13 @@ function createApp(api) {
     if (req.user.role !== "owner") {
       bundle.ledger = ownerOnlyLedger(bundle.ledger, false);
       bundle.topProducts = [];
+    } else {
+      bundle.overviewMetrics = getOverviewMetrics(
+        api,
+        req.params.date,
+        String(req.query.month || req.params.date.slice(0, 7)),
+        storeName
+      );
     }
     res.json(bundle);
   });
@@ -2078,6 +2175,19 @@ function createApp(api) {
     const month = String(req.query.month || monthText());
     const storeName = resolveRequestedStoreName(req, req.query.storeName, true);
     res.json(getMonthlySummary(api, month, storeName));
+  });
+
+  app.get("/api/overview-range", function overviewRange(req, res) {
+    if (!requireOwner(req, res)) {
+      return;
+    }
+    const fromDate = String(req.query.fromDate || "").trim();
+    const toDate = String(req.query.toDate || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+      return res.status(400).json({ error: "Valid fromDate and toDate are required." });
+    }
+    const storeName = resolveRequestedStoreName(req, req.query.storeName, true);
+    res.json(getRangeOverview(api, fromDate, toDate, storeName));
   });
 
   app.get("/api/analytics", function analytics(req, res) {
