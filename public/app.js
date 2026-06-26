@@ -245,13 +245,13 @@ function renderStoreFilter() {
 }
 
 function tableHtml(headers, rows) {
-  return "<table><thead><tr>" + headers.map(function (head) {
+  return '<div class="table-scroll"><table><thead><tr>' + headers.map(function (head) {
     return "<th>" + head + "</th>";
   }).join("") + "</tr></thead><tbody>" + rows.map(function (row) {
     return "<tr>" + row.map(function (cell) {
       return "<td>" + cell + "</td>";
     }).join("") + "</tr>";
-  }).join("") + "</tbody></table>";
+  }).join("") + "</tbody></table></div>";
 }
 
 function splitProductKeywords(value) {
