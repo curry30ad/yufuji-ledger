@@ -409,6 +409,9 @@ function renderOverview() {
   const overviewMetrics = state.overviewBundle.overviewMetrics || {};
   const rangeMetrics = state.overviewRange || null;
   const activeMonth = byId("activeMonth").value;
+  const dayPurchaseTotal = (state.purchases || []).reduce(function sumPurchaseTotal(total, item) {
+    return total + Number(item.totalCost || 0);
+  }, 0);
   const monthMetrics = overviewMetrics.month && overviewMetrics.month.totals
     ? overviewMetrics.month
     : { key: activeMonth, salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, profit: 0 } };
@@ -420,7 +423,7 @@ function renderOverview() {
     { label: "\u4eca\u65e5\u5b9e\u9645\u6536\u6b3e", value: yuan(ledger.actualReceived), sub: "\u73b0\u91d1\u3001\u5fae\u4fe1\u3001\u652f\u4ed8\u5b9d\u3001\u4f1a\u5458\u5361" },
     { label: "\u4eca\u65e5\u4f1a\u5458\u5361\u6536\u5165", value: yuan(ledger.memberCardAmount), sub: "\u5f53\u5929\u5df2\u8bb0\u5f55\u7684\u4f1a\u5458\u5361\u6536\u5165" },
     { label: "\u4eca\u65e5\u652f\u51fa", value: yuan(ledger.expenseTotal), sub: "\u5f53\u5929\u652f\u51fa\u5408\u8ba1" },
-    { label: "\u4eca\u65e5\u7b80\u7248\u5229\u6da6", value: yuan(ledger.profit), sub: "\u4eca\u65e5\u9500\u552e\u603b\u989d - \u4eca\u65e5\u652f\u51fa" }
+    { label: "\u5f53\u65e5\u8fdb\u8d27\u652f\u51fa", value: yuan(dayPurchaseTotal), sub: "\u6309\u5f53\u5929\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" }
   ];
   const monthCards = [
     { label: "\u672c\u6708\u6709\u9500\u552e\u5929\u6570", value: String(monthMetrics.salesDays), sub: "\u53ea\u7edf\u8ba1\u9500\u552e\u603b\u989d\u5927\u4e8e0\u7684\u5929" },
