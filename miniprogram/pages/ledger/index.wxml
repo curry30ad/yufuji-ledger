@@ -40,8 +40,8 @@
     <view class="section-title">添加支出</view>
     <view class="field">
       <text class="label">支出类型</text>
-      <picker range="{{['进货支出','日常支出']}}" bindchange="onExpenseTypePick">
-        <view class="picker">{{expenseForm.expenseType === 'purchase' ? '进货支出' : '日常支出'}}</view>
+      <picker range="{{expenseTypeOptions}}" range-key="label" bindchange="onExpenseTypePick">
+        <view class="picker">{{expenseTypeOptions[expenseTypeIndex].label}}</view>
       </picker>
     </view>
     <view class="field"><text class="label">金额</text><input class="input" value="{{expenseForm.amount}}" data-field="amount" bindinput="onExpenseInput" /></view>
@@ -65,7 +65,7 @@
     <view class="section-title">支出记录</view>
     <view wx:if="{{expenses.length}}">
       <view class="list-item" wx:for="{{expenses}}" wx:key="id">
-        <view class="item-title">{{item.expenseType === 'purchase' ? '进货支出' : '日常支出'}} · ¥{{item.amount}}</view>
+        <view class="item-title">{{item.expenseLabel || '其他日常支出'}} · ¥{{item.amount}}</view>
         <view class="item-meta">{{item.note || '无备注'}}</view>
         <button class="warn-btn" size="mini" data-id="{{item.id}}" bindtap="deleteExpense">删除</button>
       </view>

@@ -16,6 +16,17 @@ function emptyLedger(date) {
   };
 }
 
+const EXPENSE_TYPE_OPTIONS = [
+  { value: "purchase", label: "进货支出" },
+  { value: "rent", label: "房租" },
+  { value: "utilities", label: "水电" },
+  { value: "labor", label: "人工" },
+  { value: "packaging", label: "包装耗材" },
+  { value: "platform_fee", label: "平台抽成" },
+  { value: "delivery", label: "配送费" },
+  { value: "other_daily", label: "其他日常支出" }
+];
+
 Page({
   data: {
     user: null,
@@ -32,10 +43,12 @@ Page({
       note: ""
     },
     expenseForm: {
-      expenseType: "purchase",
+      expenseType: "other_daily",
       amount: "",
       note: ""
-    }
+    },
+    expenseTypeOptions: EXPENSE_TYPE_OPTIONS,
+    expenseTypeIndex: 7
   },
 
   onShow() {
@@ -76,8 +89,11 @@ Page({
   },
 
   onExpenseTypePick(e) {
+    const index = Number(e.detail.value);
+    const option = EXPENSE_TYPE_OPTIONS[index];
     this.setData({
-      "expenseForm.expenseType": e.detail.value === "0" ? "purchase" : "daily"
+      "expenseForm.expenseType": option ? option.value : "other_daily",
+      expenseTypeIndex: Number.isFinite(index) ? index : 7
     });
   },
 
@@ -155,7 +171,8 @@ Page({
         data: Object.assign({}, this.data.expenseForm, { date: this.data.date })
       });
       this.setData({
-        expenseForm: { expenseType: "purchase", amount: "", note: "" }
+        expenseForm: { expenseType: "other_daily", amount: "", note: "" },
+        expenseTypeIndex: 7
       });
       wx.showToast({ title: "已添加", icon: "success" });
       this.loadBundle();

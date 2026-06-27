@@ -25,8 +25,18 @@ const OWNER_DISPLAY_NAME = "\u4e8e\u798f\u8bb0";
 const LEGACY_STORE_NAME_MAPPINGS = [
   { from: "é»è®¤é¨åº", to: DEFAULT_STORE_NAME },
   { from: "????", to: DEFAULT_STORE_NAME },
-  { from: "??1", to: "store1" }
+  { from: "??1", to: "门店1" }
 ];
+const EXPENSE_TYPE_LABELS = {
+  purchase: "进货支出",
+  rent: "房租",
+  utilities: "水电",
+  labor: "人工",
+  packaging: "包装耗材",
+  platform_fee: "平台抽成",
+  delivery: "配送费",
+  other_daily: "其他日常支出"
+};
 const DEFAULT_RECEIPT_LEXICON = {
   ignoreLineKeywords: [],
   fieldPrefixes: [],
@@ -207,6 +217,47 @@ function intValue(value, fallback) {
   return Number.isFinite(num) ? Math.trunc(num) : fallback;
 }
 
+function normalizeExpenseType(value) {
+  const text = String(value || "").trim();
+  return Object.prototype.hasOwnProperty.call(EXPENSE_TYPE_LABELS, text) ? text : "other_daily";
+}
+
+function expenseTypeLabel(value) {
+  return EXPENSE_TYPE_LABELS[normalizeExpenseType(value)] || EXPENSE_TYPE_LABELS.other_daily;
+}
+
+function buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal) {
+  const grossProfit = money(money(salesTotal) - money(purchaseTotal));
+  const actualProfit = money(grossProfit - money(expenseTotal));
+  return {
+    grossProfit: grossProfit,
+    actualProfit: actualProfit,
+    profit: actualProfit
+  };
+}
+
+function normalizePurchaseItemPayload(item) {
+  const payload = item || {};
+  const quantity = money(payload.quantity);
+  const unitCost = money(payload.unitCost);
+  return {
+    productName: String(payload.productName || "").trim(),
+    quantity: quantity,
+    unit: String(payload.unit || "").trim(),
+    unitCost: unitCost,
+    totalCost: payload.totalCost === undefined || payload.totalCost === null || payload.totalCost === ""
+      ? money(quantity * unitCost)
+      : money(payload.totalCost)
+  };
+}
+
+function createPurchaseOrderNo(date, storeName) {
+  const datePart = String(date || todayText()).replace(/-/g, "");
+  const storePart = Buffer.from(String(storeName || DEFAULT_STORE_NAME)).toString("hex").slice(0, 4).toUpperCase() || "MAIN";
+  const randomPart = crypto.randomBytes(2).toString("hex").toUpperCase();
+  return "PO-" + datePart + "-" + storePart + "-" + randomPart;
+}
+
 function createDbApi(db, persist) {
   function run(sql, params) {
     db.run(sql, params || []);
@@ -321,6 +372,7 @@ function createSchema(api) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       purchase_date TEXT NOT NULL,
       store_name TEXT NOT NULL DEFAULT '${DEFAULT_STORE_NAME}',
+      purchase_order_no TEXT NOT NULL DEFAULT '',
       product_name TEXT NOT NULL,
       quantity REAL NOT NULL DEFAULT 0,
       unit TEXT NOT NULL DEFAULT '',
@@ -588,6 +640,7 @@ function migrateSchema(api) {
   ensureColumn(api, "sale_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "expense_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "purchase_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
+  ensureColumn(api, "purchase_entries", "purchase_order_no TEXT NOT NULL DEFAULT ''");
   ensureColumn(api, "purchase_entries", "supplier TEXT NOT NULL DEFAULT ''");
   ensureDailyLedgerCompositeKey(api);
   ensureColumn(api, "daily_ledgers", "member_card_amount REAL NOT NULL DEFAULT 0");
@@ -595,11 +648,13 @@ function migrateSchema(api) {
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_sale_entries_date_store ON sale_entries(sale_date, store_name)");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_expense_entries_date_store ON expense_entries(expense_date, store_name)");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_purchase_entries_date_store ON purchase_entries(purchase_date, store_name)");
+  api.raw.exec("CREATE INDEX IF NOT EXISTS idx_purchase_entries_order_no ON purchase_entries(purchase_order_no)");
 
   api.run("UPDATE users SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
   api.run("UPDATE sale_entries SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
   api.run("UPDATE expense_entries SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
   api.run("UPDATE purchase_entries SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
+  api.run("UPDATE expense_entries SET expense_type = 'other_daily' WHERE expense_type IS NULL OR TRIM(expense_type) = '' OR expense_type = 'daily'", []);
   api.run("UPDATE daily_ledgers SET store_name = ? WHERE store_name IS NULL OR TRIM(store_name) = ''", [DEFAULT_STORE_NAME]);
   LEGACY_STORE_NAME_MAPPINGS.forEach(function applyLegacyStoreMapping(item) {
     api.run("UPDATE users SET store_name = ? WHERE store_name = ?", [item.to, item.from]);
@@ -683,7 +738,7 @@ function ownerOnlyLedger(ledger, isOwnerUser) {
   if (isOwnerUser) {
     return ledger;
   }
-  return Object.assign({}, ledger, { profit: null });
+  return Object.assign({}, ledger, { grossProfit: null, actualProfit: null, profit: null });
 }
 
 function getAvailableStores(api) {
@@ -727,6 +782,35 @@ function resolveStoreName(req, inputStoreName) {
   return normalizeStoreName(inputStoreName);
 }
 
+function canAccessStore(req, storeName) {
+  if (!req.user) {
+    return false;
+  }
+  if (req.user.role === "owner") {
+    return true;
+  }
+  return normalizeStoreName(req.user.storeName) === normalizeStoreName(storeName);
+}
+
+function requireStoreAccess(req, res, storeName) {
+  if (canAccessStore(req, storeName)) {
+    return true;
+  }
+  res.status(403).json({ error: "You cannot operate on another store's records." });
+  return false;
+}
+
+function ensureWritableRecord(req, res, row, notFoundMessage) {
+  if (!row) {
+    res.status(404).json({ error: notFoundMessage });
+    return null;
+  }
+  if (!requireStoreAccess(req, res, row.store_name)) {
+    return null;
+  }
+  return row;
+}
+
 function buildStoreFilter(columnName, storeName) {
   if (!storeName) {
     return { clause: "", params: [] };
@@ -753,6 +837,15 @@ function getExpensesTotal(api, date, storeName) {
   const filter = buildStoreFilter("store_name", storeName);
   const row = api.one(
     "SELECT COALESCE(SUM(amount), 0) AS total FROM expense_entries WHERE expense_date = ?" + filter.clause,
+    [date].concat(filter.params)
+  );
+  return money(row ? row.total : 0);
+}
+
+function getPurchasesTotal(api, date, storeName) {
+  const filter = buildStoreFilter("store_name", storeName);
+  const row = api.one(
+    "SELECT COALESCE(SUM(total_cost), 0) AS total FROM purchase_entries WHERE purchase_date = ?" + filter.clause,
     [date].concat(filter.params)
   );
   return money(row ? row.total : 0);
@@ -1026,13 +1119,14 @@ function getPurchaseEntries(api, date, storeName) {
   const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
   const filter = buildStoreFilter("store_name", normalizedStoreName);
   return api.all(
-    "SELECT * FROM purchase_entries WHERE purchase_date = ?" + filter.clause + " ORDER BY id DESC",
+    "SELECT * FROM purchase_entries WHERE purchase_date = ?" + filter.clause + " ORDER BY purchase_order_no DESC, id ASC",
     [date].concat(filter.params)
   ).map(function mapRow(row) {
     return {
       id: row.id,
       date: row.purchase_date,
       storeName: normalizeStoreName(row.store_name),
+      purchaseOrderNo: row.purchase_order_no || "",
       productName: row.product_name,
       quantity: money(row.quantity),
       unit: row.unit || "",
@@ -1053,13 +1147,14 @@ function getMonthlyPurchaseEntries(api, month, storeName) {
   const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
   const filter = buildStoreFilter("store_name", normalizedStoreName);
   return api.all(
-    "SELECT * FROM purchase_entries WHERE purchase_date BETWEEN ? AND ?" + filter.clause + " ORDER BY purchase_date ASC, id ASC",
+    "SELECT * FROM purchase_entries WHERE purchase_date BETWEEN ? AND ?" + filter.clause + " ORDER BY purchase_date ASC, purchase_order_no ASC, id ASC",
     [fromDate, toDate].concat(filter.params)
   ).map(function mapRow(row) {
     return {
       id: row.id,
       date: row.purchase_date,
       storeName: normalizeStoreName(row.store_name),
+      purchaseOrderNo: row.purchase_order_no || "",
       productName: row.product_name,
       quantity: money(row.quantity),
       unit: row.unit || "",
@@ -1079,9 +1174,13 @@ function getMonthlyPurchaseSummary(api, month, storeName) {
   const totalCost = entries.reduce(function sum(acc, item) {
     return acc + money(item.totalCost);
   }, 0);
+  const orderCount = Array.from(new Set(entries.map(function mapOrder(item) {
+    return String(item.purchaseOrderNo || "").trim();
+  }).filter(Boolean))).length;
   return {
     totalCost: money(totalCost),
     entryCount: entries.length,
+    orderCount: orderCount,
     productCount: Array.from(new Set(entries.map(function mapItem(item) {
       return String(item.productName || "").trim();
     }).filter(Boolean))).length
@@ -1165,6 +1264,7 @@ function getMonthlyPurchaseDailySummary(api, month, storeName) {
         date: date,
         storeSet: new Set(),
         productSet: new Set(),
+        orderSet: new Set(),
         entryCount: 0,
         totalQuantity: 0,
         totalCost: 0
@@ -1180,6 +1280,9 @@ function getMonthlyPurchaseDailySummary(api, month, storeName) {
     if (item.productName) {
       current.productSet.add(String(item.productName).trim());
     }
+    if (item.purchaseOrderNo) {
+      current.orderSet.add(String(item.purchaseOrderNo).trim());
+    }
   });
 
   return Object.keys(grouped).sort().map(function mapGroup(key) {
@@ -1188,6 +1291,7 @@ function getMonthlyPurchaseDailySummary(api, month, storeName) {
       date: item.date,
       storeName: Array.from(item.storeSet).join(" / "),
       productCount: item.productSet.size,
+      orderCount: item.orderSet.size,
       entryCount: item.entryCount,
       totalQuantity: money(item.totalQuantity),
       totalCost: money(item.totalCost)
@@ -1206,20 +1310,96 @@ function getMonthlyStoreSalesSummary(api, month) {
     "SELECT store_name, ROUND(SUM(total_cost), 2) AS total_cost FROM purchase_entries WHERE purchase_date BETWEEN ? AND ? GROUP BY store_name ORDER BY store_name ASC",
     [fromDate, toDate]
   );
+  const expenseRows = api.all(
+    "SELECT store_name, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ? GROUP BY store_name ORDER BY store_name ASC",
+    [fromDate, toDate]
+  );
   const purchaseMap = {};
+  const expenseMap = {};
   purchaseRows.forEach(function fillPurchaseMap(row) {
     purchaseMap[normalizeStoreName(row.store_name)] = money(row.total_cost);
+  });
+  expenseRows.forEach(function fillExpenseMap(row) {
+    expenseMap[normalizeStoreName(row.store_name)] = money(row.total);
   });
   return saleRows.map(function mapRow(row) {
     const storeName = normalizeStoreName(row.store_name);
     const salesTotal = money(row.sales_total);
     const purchaseTotal = money(purchaseMap[storeName] || 0);
+    const expenseTotal = money(expenseMap[storeName] || 0);
+    const profitMetrics = buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal);
     return {
       storeName: storeName,
       salesTotal: salesTotal,
       actualReceived: money(row.actual_received),
       purchaseTotal: purchaseTotal,
-      profit: money(salesTotal - purchaseTotal)
+      expenseTotal: expenseTotal,
+      grossProfit: profitMetrics.grossProfit,
+      actualProfit: profitMetrics.actualProfit,
+      profit: profitMetrics.actualProfit
+    };
+  });
+}
+
+function getInventorySummary(api, date, storeName) {
+  const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
+  const purchaseFilter = buildStoreFilter("store_name", normalizedStoreName);
+  const saleFilter = buildStoreFilter("s.store_name", normalizedStoreName);
+  const purchaseRows = api.all(
+    "SELECT product_name, unit, ROUND(SUM(quantity), 2) AS total_quantity FROM purchase_entries WHERE purchase_date <= ?" + purchaseFilter.clause + " GROUP BY product_name, unit ORDER BY product_name ASC",
+    [date].concat(purchaseFilter.params)
+  );
+  const saleRows = api.all(
+    "SELECT p.name AS product_name, p.unit, ROUND(SUM(s.quantity), 2) AS total_quantity FROM sale_entries s JOIN products p ON p.id = s.product_id WHERE s.sale_date <= ?" + saleFilter.clause + " GROUP BY p.name, p.unit ORDER BY p.name ASC",
+    [date].concat(saleFilter.params)
+  );
+  const grouped = {};
+
+  purchaseRows.forEach(function mapPurchase(row) {
+    const key = String(row.product_name || "").trim();
+    if (!key) {
+      return;
+    }
+    grouped[key] = {
+      productName: key,
+      unit: row.unit || "",
+      purchasedQuantity: money(row.total_quantity),
+      soldQuantity: 0,
+      balanceQuantity: money(row.total_quantity)
+    };
+  });
+
+  saleRows.forEach(function mapSale(row) {
+    const key = String(row.product_name || "").trim();
+    if (!key) {
+      return;
+    }
+    if (!grouped[key]) {
+      grouped[key] = {
+        productName: key,
+        unit: row.unit || "",
+        purchasedQuantity: 0,
+        soldQuantity: 0,
+        balanceQuantity: 0
+      };
+    }
+    grouped[key].soldQuantity = money(grouped[key].soldQuantity + money(row.total_quantity));
+    grouped[key].balanceQuantity = money(grouped[key].purchasedQuantity - grouped[key].soldQuantity);
+    if (!grouped[key].unit && row.unit) {
+      grouped[key].unit = row.unit;
+    }
+  });
+
+  return Object.keys(grouped).sort(function sortName(a, b) {
+    return a.localeCompare(b, "zh-CN");
+  }).map(function mapKey(key) {
+    const item = grouped[key];
+    return {
+      productName: item.productName,
+      unit: item.unit,
+      purchasedQuantity: money(item.purchasedQuantity),
+      soldQuantity: money(item.soldQuantity),
+      balanceQuantity: money(item.balanceQuantity)
     };
   });
 }
@@ -1303,7 +1483,8 @@ function getLedgerBundle(api, date, storeName) {
       id: row.id,
       date: row.expense_date,
       storeName: normalizeStoreName(row.store_name),
-      expenseType: row.expense_type,
+      expenseType: normalizeExpenseType(row.expense_type),
+      expenseLabel: expenseTypeLabel(row.expense_type),
       amount: money(row.amount),
       note: row.note,
       createdBy: row.created_by,
@@ -1316,6 +1497,10 @@ function getLedgerBundle(api, date, storeName) {
   const expenseTotal = expenses.reduce(function sum(total, item) {
     return total + item.amount;
   }, 0);
+  const purchaseTotal = purchases.reduce(function sum(total, item) {
+    return total + item.totalCost;
+  }, 0);
+  const profitMetrics = buildProfitMetrics(ledger.sales_total, purchaseTotal, expenseTotal);
 
   return {
     ledger: {
@@ -1332,11 +1517,15 @@ function getLedgerBundle(api, date, storeName) {
       roundingAmount: money(ledger.rounding_amount),
       note: ledger.note || (Array.isArray(ledger.notes) ? ledger.notes.join(" | ") : ""),
       expenseTotal: money(expenseTotal),
-      profit: money(money(ledger.sales_total) - expenseTotal)
+      purchaseTotal: money(purchaseTotal),
+      grossProfit: profitMetrics.grossProfit,
+      actualProfit: profitMetrics.actualProfit,
+      profit: profitMetrics.actualProfit
     },
     sales: sales,
     expenses: expenses,
     purchases: purchases,
+    inventorySummary: getInventorySummary(api, date, normalizedStoreName),
     productSummary: getProductSalesSummary(api, date, date, normalizedStoreName),
     topProducts: getTopProducts(api, date, date, 10, normalizedStoreName)
   };
@@ -1376,6 +1565,7 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
     const salesTotal = money(row.sales_total);
     const expenseTotal = money(expenseMap[row.ledger_date] || 0);
     const purchaseTotal = money(purchaseMap[row.ledger_date] || 0);
+    const profitMetrics = buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal);
     return {
       date: row.ledger_date,
       salesTotal: salesTotal,
@@ -1383,7 +1573,9 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
       memberCardAmount: money(row.member_card_amount),
       expenseTotal: expenseTotal,
       purchaseTotal: purchaseTotal,
-      profit: money(salesTotal - purchaseTotal - expenseTotal)
+      grossProfit: profitMetrics.grossProfit,
+      actualProfit: profitMetrics.actualProfit,
+      profit: profitMetrics.actualProfit
     };
   });
 
@@ -1394,10 +1586,11 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
       acc.memberCardAmount += day.memberCardAmount;
       acc.expenseTotal += day.expenseTotal;
       acc.purchaseTotal += day.purchaseTotal;
-      acc.profit += day.profit;
+      acc.grossProfit += day.grossProfit;
+      acc.actualProfit += day.actualProfit;
       return acc;
     },
-    { salesTotal: 0, actualReceived: 0, memberCardAmount: 0, expenseTotal: 0, purchaseTotal: 0, profit: 0 }
+    { salesTotal: 0, actualReceived: 0, memberCardAmount: 0, expenseTotal: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 }
   );
   const salesDays = days.filter(function filterSalesDay(day) {
     return day.salesTotal > 0;
@@ -1414,7 +1607,9 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
       expenseTotal: money(totals.expenseTotal),
       purchaseTotal: money(totals.purchaseTotal),
       averageSales: salesDays ? money(totals.salesTotal / salesDays) : 0,
-      profit: money(totals.profit)
+      grossProfit: money(totals.grossProfit),
+      actualProfit: money(totals.actualProfit),
+      profit: money(totals.actualProfit)
     },
     days: days
   };
@@ -1444,14 +1639,25 @@ function getMonthlySummary(api, month, storeName) {
     "SELECT expense_date, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ?" + expenseFilter.clause + " GROUP BY expense_date",
     [fromDate, toDate].concat(expenseFilter.params)
   );
+  const purchaseFilter = buildStoreFilter("store_name", normalizedStoreName);
+  const purchaseRows = api.all(
+    "SELECT purchase_date, ROUND(SUM(total_cost), 2) AS total FROM purchase_entries WHERE purchase_date BETWEEN ? AND ?" + purchaseFilter.clause + " GROUP BY purchase_date",
+    [fromDate, toDate].concat(purchaseFilter.params)
+  );
   const expenseMap = {};
+  const purchaseMap = {};
   expenseRows.forEach(function buildMap(row) {
     expenseMap[row.expense_date] = money(row.total);
+  });
+  purchaseRows.forEach(function buildPurchaseMap(row) {
+    purchaseMap[row.purchase_date] = money(row.total);
   });
 
   const days = ledgerRows.map(function mapDay(row) {
     const expenseTotal = money(expenseMap[row.ledger_date] || 0);
+    const purchaseTotal = money(purchaseMap[row.ledger_date] || 0);
     const salesTotal = money(row.sales_total);
+    const profitMetrics = buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal);
     return {
       date: row.ledger_date,
       storeName: normalizedStoreName || "All Stores",
@@ -1459,7 +1665,10 @@ function getMonthlySummary(api, month, storeName) {
       actualReceived: money(row.actual_received),
       memberCardAmount: money(row.member_card_amount),
       expenseTotal: expenseTotal,
-      profit: money(salesTotal - expenseTotal)
+      purchaseTotal: purchaseTotal,
+      grossProfit: profitMetrics.grossProfit,
+      actualProfit: profitMetrics.actualProfit,
+      profit: profitMetrics.actualProfit
     };
   });
 
@@ -1469,10 +1678,12 @@ function getMonthlySummary(api, month, storeName) {
       acc.actualReceived += day.actualReceived;
       acc.memberCardAmount += day.memberCardAmount;
       acc.expenseTotal += day.expenseTotal;
-      acc.profit += day.profit;
+      acc.purchaseTotal += day.purchaseTotal;
+      acc.grossProfit += day.grossProfit;
+      acc.actualProfit += day.actualProfit;
       return acc;
     },
-    { salesTotal: 0, actualReceived: 0, memberCardAmount: 0, expenseTotal: 0, profit: 0 }
+    { salesTotal: 0, actualReceived: 0, memberCardAmount: 0, expenseTotal: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 }
   );
   const monthlyPurchases = getMonthlyPurchaseEntries(api, month, normalizedStoreName);
   const purchaseSummary = getMonthlyPurchaseSummary(api, month, normalizedStoreName);
@@ -1486,7 +1697,10 @@ function getMonthlySummary(api, month, storeName) {
       actualReceived: money(totals.actualReceived),
       memberCardAmount: money(totals.memberCardAmount),
       expenseTotal: money(totals.expenseTotal),
-      profit: money(totals.profit)
+      purchaseTotal: money(totals.purchaseTotal),
+      grossProfit: money(totals.grossProfit),
+      actualProfit: money(totals.actualProfit),
+      profit: money(totals.actualProfit)
     },
     days: days,
     purchases: monthlyPurchases,
@@ -1539,7 +1753,8 @@ function getMonthlyExpenseEntries(api, month, storeName) {
       id: row.id,
       date: row.expense_date,
       storeName: normalizeStoreName(row.store_name),
-      expenseType: row.expense_type,
+      expenseType: normalizeExpenseType(row.expense_type),
+      expenseLabel: expenseTypeLabel(row.expense_type),
       amount: money(row.amount),
       note: row.note,
       createdBy: row.created_by,
@@ -1713,7 +1928,7 @@ function createApp(api) {
     const storeName = normalizeStoreName(body.storeName);
 
     if (!name || !username) {
-      return res.status(400).json({ error: "Please upload a receipt image first." });
+      return res.status(400).json({ error: "Name and username are required." });
     }
 
     const duplicate = api.one(
@@ -1933,17 +2148,28 @@ function createApp(api) {
     const current = ensureLedger(api, date, req.user.id, storeName);
     const now = new Date().toISOString();
     const body = req.body || {};
+    const refundAmount = money(body.refundAmount);
+    const roundingAmount = money(body.roundingAmount);
+    let salesTotal = money(body.salesTotal);
+    let actualReceived = money(body.actualReceived);
+    if (refundAmount === 0 && roundingAmount === 0) {
+      if (!String(body.salesTotal || "").trim() && String(body.actualReceived || "").trim()) {
+        salesTotal = actualReceived;
+      } else if (!String(body.actualReceived || "").trim() && String(body.salesTotal || "").trim()) {
+        actualReceived = salesTotal;
+      }
+    }
     api.run(
       "UPDATE daily_ledgers SET sales_total = ?, actual_received = ?, cash_amount = ?, wechat_amount = ?, alipay_amount = ?, member_card_amount = ?, refund_amount = ?, rounding_amount = ?, note = ?, updated_by = ?, updated_at = ? WHERE id = ?",
       [
-        money(body.salesTotal),
-        money(body.actualReceived),
+        salesTotal,
+        actualReceived,
         money(body.cashAmount),
         money(body.wechatAmount),
         money(body.alipayAmount),
         money(body.memberCardAmount),
-        money(body.refundAmount),
-        money(body.roundingAmount),
+        refundAmount,
+        roundingAmount,
         String(body.note || ""),
         req.user.id,
         now,
@@ -2028,6 +2254,10 @@ function createApp(api) {
 
   app.put("/api/sales/:id", function updateSale(req, res) {
     const body = req.body || {};
+    const existing = ensureWritableRecord(req, res, api.one("SELECT * FROM sale_entries WHERE id = ?", [intValue(req.params.id, 0)]), "Sale record not found.");
+    if (!existing) {
+      return;
+    }
     const now = new Date().toISOString();
     api.run(
       "UPDATE sale_entries SET quantity = ?, amount = ?, note = ?, updated_at = ? WHERE id = ?",
@@ -2037,6 +2267,10 @@ function createApp(api) {
   });
 
   app.delete("/api/sales/:id", function deleteSale(req, res) {
+    const existing = ensureWritableRecord(req, res, api.one("SELECT * FROM sale_entries WHERE id = ?", [intValue(req.params.id, 0)]), "Sale record not found.");
+    if (!existing) {
+      return;
+    }
     api.run("DELETE FROM sale_entries WHERE id = ?", [intValue(req.params.id, 0)]);
     res.json({ success: true });
   });
@@ -2053,7 +2287,8 @@ function createApp(api) {
         id: row.id,
         date: row.expense_date,
         storeName: normalizeStoreName(row.store_name),
-        expenseType: row.expense_type,
+        expenseType: normalizeExpenseType(row.expense_type),
+        expenseLabel: expenseTypeLabel(row.expense_type),
         amount: money(row.amount),
         note: row.note,
         createdBy: row.created_by,
@@ -2069,22 +2304,30 @@ function createApp(api) {
     const storeName = resolveRequestedStoreName(req, body.storeName, false);
     api.run(
       "INSERT INTO expense_entries (expense_date, store_name, expense_type, amount, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      [body.date, storeName, body.expenseType === "purchase" ? "purchase" : "daily", money(body.amount), String(body.note || ""), req.user.id, now, now]
+      [body.date, storeName, normalizeExpenseType(body.expenseType), money(body.amount), String(body.note || ""), req.user.id, now, now]
     );
     res.json({ success: true });
   });
 
   app.put("/api/expenses/:id", function updateExpense(req, res) {
     const body = req.body || {};
+    const existing = ensureWritableRecord(req, res, api.one("SELECT * FROM expense_entries WHERE id = ?", [intValue(req.params.id, 0)]), "Expense record not found.");
+    if (!existing) {
+      return;
+    }
     const now = new Date().toISOString();
     api.run(
       "UPDATE expense_entries SET expense_type = ?, amount = ?, note = ?, updated_at = ? WHERE id = ?",
-      [body.expenseType === "purchase" ? "purchase" : "daily", money(body.amount), String(body.note || ""), now, intValue(req.params.id, 0)]
+      [normalizeExpenseType(body.expenseType), money(body.amount), String(body.note || ""), now, intValue(req.params.id, 0)]
     );
     res.json({ success: true });
   });
 
   app.delete("/api/expenses/:id", function deleteExpense(req, res) {
+    const existing = ensureWritableRecord(req, res, api.one("SELECT * FROM expense_entries WHERE id = ?", [intValue(req.params.id, 0)]), "Expense record not found.");
+    if (!existing) {
+      return;
+    }
     api.run("DELETE FROM expense_entries WHERE id = ?", [intValue(req.params.id, 0)]);
     res.json({ success: true });
   });
@@ -2097,60 +2340,58 @@ function createApp(api) {
   app.post("/api/purchases", function createPurchase(req, res) {
     const body = req.body || {};
     const date = String(body.date || "").trim();
-    const productName = String(body.productName || "").trim();
-    const quantity = money(body.quantity);
-    const unit = String(body.unit || "").trim();
-    const unitCost = money(body.unitCost);
-    const totalCost = body.totalCost === undefined || body.totalCost === null || body.totalCost === ""
-      ? money(quantity * unitCost)
-      : money(body.totalCost);
-    if (!date || !productName) {
-      return res.status(400).json({ error: "Purchase date and product name are required." });
+    const items = Array.isArray(body.items) && body.items.length
+      ? body.items.map(normalizePurchaseItemPayload).filter(function filterItem(item) {
+          return item.productName && item.quantity > 0;
+        })
+      : [normalizePurchaseItemPayload(body)].filter(function filterItem(item) {
+          return item.productName && item.quantity > 0;
+        });
+    if (!date || !items.length) {
+      return res.status(400).json({ error: "Purchase date and at least one purchase item are required." });
     }
     const now = new Date().toISOString();
     const storeName = resolveRequestedStoreName(req, body.storeName, false);
-    api.run(
-      "INSERT INTO purchase_entries (purchase_date, store_name, product_name, quantity, unit, unit_cost, total_cost, supplier, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [date, storeName, productName, quantity, unit, unitCost, totalCost, String(body.supplier || ""), String(body.note || ""), req.user.id, now, now]
-    );
-    rebuildPurchaseProductByName(api, productName);
-    res.json({ success: true });
+    const purchaseOrderNo = String(body.purchaseOrderNo || "").trim() || createPurchaseOrderNo(date, storeName);
+    items.forEach(function saveItem(item) {
+      api.run(
+        "INSERT INTO purchase_entries (purchase_date, store_name, purchase_order_no, product_name, quantity, unit, unit_cost, total_cost, supplier, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [date, storeName, purchaseOrderNo, item.productName, item.quantity, item.unit, item.unitCost, item.totalCost, String(body.supplier || ""), String(body.note || ""), req.user.id, now, now]
+      );
+      rebuildPurchaseProductByName(api, item.productName);
+    });
+    res.json({ success: true, purchaseOrderNo: purchaseOrderNo, createdCount: items.length });
   });
 
   app.put("/api/purchases/:id", function updatePurchase(req, res) {
     const body = req.body || {};
     const purchaseId = intValue(req.params.id, 0);
-    const existing = api.one("SELECT * FROM purchase_entries WHERE id = ?", [purchaseId]);
+    const existing = ensureWritableRecord(req, res, api.one("SELECT * FROM purchase_entries WHERE id = ?", [purchaseId]), "Purchase record not found.");
     if (!existing) {
-      return res.status(404).json({ error: "Purchase record not found." });
+      return;
     }
-    const productName = String(body.productName || "").trim();
-    const quantity = money(body.quantity);
-    const unit = String(body.unit || "").trim();
-    const unitCost = money(body.unitCost);
-    const totalCost = body.totalCost === undefined || body.totalCost === null || body.totalCost === ""
-      ? money(quantity * unitCost)
-      : money(body.totalCost);
-    if (!productName) {
+    const item = normalizePurchaseItemPayload(body);
+    if (!item.productName) {
       return res.status(400).json({ error: "Product name is required." });
     }
     const now = new Date().toISOString();
     api.run(
-      "UPDATE purchase_entries SET product_name = ?, quantity = ?, unit = ?, unit_cost = ?, total_cost = ?, supplier = ?, note = ?, updated_at = ? WHERE id = ?",
-      [productName, quantity, unit, unitCost, totalCost, String(body.supplier || ""), String(body.note || ""), now, purchaseId]
+      "UPDATE purchase_entries SET purchase_order_no = ?, product_name = ?, quantity = ?, unit = ?, unit_cost = ?, total_cost = ?, supplier = ?, note = ?, updated_at = ? WHERE id = ?",
+      [String(body.purchaseOrderNo || existing.purchase_order_no || "").trim(), item.productName, item.quantity, item.unit, item.unitCost, item.totalCost, String(body.supplier || ""), String(body.note || ""), now, purchaseId]
     );
     rebuildPurchaseProductByName(api, existing.product_name);
-    rebuildPurchaseProductByName(api, productName);
+    rebuildPurchaseProductByName(api, item.productName);
     res.json({ success: true });
   });
 
   app.delete("/api/purchases/:id", function deletePurchase(req, res) {
     const purchaseId = intValue(req.params.id, 0);
-    const existing = api.one("SELECT * FROM purchase_entries WHERE id = ?", [purchaseId]);
-    api.run("DELETE FROM purchase_entries WHERE id = ?", [purchaseId]);
-    if (existing) {
-      rebuildPurchaseProductByName(api, existing.product_name);
+    const existing = ensureWritableRecord(req, res, api.one("SELECT * FROM purchase_entries WHERE id = ?", [purchaseId]), "Purchase record not found.");
+    if (!existing) {
+      return;
     }
+    api.run("DELETE FROM purchase_entries WHERE id = ?", [purchaseId]);
+    rebuildPurchaseProductByName(api, existing.product_name);
     res.json({ success: true });
   });
 
@@ -2273,7 +2514,7 @@ function createWorkbookForDaily(api, date, storeName) {
       roundingAmount: "\u62b9\u96f6",
       note: "\u5907\u6ce8",
       expenseTotal: "\u652f\u51fa\u5408\u8ba1",
-      profit: "\u7b80\u7248\u5229\u6da6"
+      purchaseTotal: "\u8fdb\u8d27\u5408\u8ba1"
     }),
     "\u65e5\u62a5\u6c47\u603b"
   );
@@ -2311,6 +2552,7 @@ function createWorkbookForDaily(api, date, storeName) {
       date: "\u65e5\u671f",
       storeName: "\u95e8\u5e97",
       expenseType: "\u652f\u51fa\u7c7b\u578b",
+      expenseLabel: "\u652f\u51fa\u7c7b\u522b",
       amount: "\u91d1\u989d",
       note: "\u5907\u6ce8",
       createdAt: "\u521b\u5efa\u65f6\u95f4",
@@ -2323,6 +2565,7 @@ function createWorkbookForDaily(api, date, storeName) {
     makeExportSheet(bundle.purchases, {
       date: "\u65e5\u671f",
       storeName: "\u95e8\u5e97",
+      purchaseOrderNo: "\u8fdb\u8d27\u5355\u53f7",
       productName: "\u8fdb\u8d27\u5546\u54c1",
       quantity: "\u6570\u91cf",
       unit: "\u5355\u4f4d",
@@ -2362,7 +2605,9 @@ function createWorkbookForMonthly(api, month, storeName) {
       actualReceived: "\u6708\u5b9e\u9645\u6536\u6b3e",
       memberCardAmount: "\u6708\u4f1a\u5458\u5361\u6536\u5165",
       expenseTotal: "\u6708\u652f\u51fa\u5408\u8ba1",
-      profit: "\u6708\u7b80\u7248\u5229\u6da6"
+      purchaseTotal: "\u6708\u8fdb\u8d27\u5408\u8ba1",
+      grossProfit: "\u6708\u6bdb\u5229\u6da6",
+      actualProfit: "\u6708\u5b9e\u9645\u5229\u6da6"
     }),
     "\u6708\u5ea6\u6c47\u603b"
   );
@@ -2375,7 +2620,9 @@ function createWorkbookForMonthly(api, month, storeName) {
       actualReceived: "\u5b9e\u9645\u6536\u6b3e",
       memberCardAmount: "\u4f1a\u5458\u5361\u6536\u5165",
       expenseTotal: "\u652f\u51fa\u5408\u8ba1",
-      profit: "\u7b80\u7248\u5229\u6da6"
+      purchaseTotal: "\u8fdb\u8d27\u5408\u8ba1",
+      grossProfit: "\u6bdb\u5229\u6da6",
+      actualProfit: "\u5b9e\u9645\u5229\u6da6"
     }),
     "\u6bcf\u65e5\u9500\u552e\u989d"
   );
@@ -2413,6 +2660,7 @@ function createWorkbookForMonthly(api, month, storeName) {
       date: "\u65e5\u671f",
       storeName: "\u95e8\u5e97",
       expenseType: "\u652f\u51fa\u7c7b\u578b",
+      expenseLabel: "\u652f\u51fa\u7c7b\u522b",
       amount: "\u91d1\u989d",
       note: "\u5907\u6ce8",
       createdAt: "\u521b\u5efa\u65f6\u95f4",
@@ -2425,6 +2673,7 @@ function createWorkbookForMonthly(api, month, storeName) {
     makeExportSheet(purchases, {
       date: "\u65e5\u671f",
       storeName: "\u95e8\u5e97",
+      purchaseOrderNo: "\u8fdb\u8d27\u5355\u53f7",
       productName: "\u8fdb\u8d27\u5546\u54c1",
       quantity: "\u6570\u91cf",
       unit: "\u5355\u4f4d",
@@ -2438,12 +2687,13 @@ function createWorkbookForMonthly(api, month, storeName) {
     "\u8fdb\u8d27\u660e\u7ec6"
   );
   XLSX.utils.book_append_sheet(
-    workbook,
-    makeExportSheet([summary.purchaseSummary], {
-      totalCost: "\u672c\u6708\u8fdb\u8d27\u603b\u989d",
-      entryCount: "\u672c\u6708\u8fdb\u8d27\u7b14\u6570",
-      productCount: "\u672c\u6708\u8fdb\u8d27\u5546\u54c1\u79cd\u6570"
-    }),
+      workbook,
+      makeExportSheet([summary.purchaseSummary], {
+        totalCost: "\u672c\u6708\u8fdb\u8d27\u603b\u989d",
+        orderCount: "\u672c\u6708\u8fdb\u8d27\u5355\u6570",
+        entryCount: "\u672c\u6708\u8fdb\u8d27\u7b14\u6570",
+        productCount: "\u672c\u6708\u8fdb\u8d27\u5546\u54c1\u79cd\u6570"
+      }),
     "\u8fdb\u8d27\u6c47\u603b"
   );
   XLSX.utils.book_append_sheet(
@@ -2464,12 +2714,13 @@ function createWorkbookForMonthly(api, month, storeName) {
   );
   XLSX.utils.book_append_sheet(
     workbook,
-    makeExportSheet(summary.purchaseDailySummary, {
-      date: "\u65e5\u671f",
-      storeName: "\u95e8\u5e97",
-      productCount: "\u5546\u54c1\u79cd\u6570",
-      entryCount: "\u8fdb\u8d27\u7b14\u6570",
-      totalQuantity: "\u5f53\u65e5\u7d2f\u8ba1\u6570\u91cf",
+      makeExportSheet(summary.purchaseDailySummary, {
+        date: "\u65e5\u671f",
+        storeName: "\u95e8\u5e97",
+        orderCount: "\u8fdb\u8d27\u5355\u6570",
+        productCount: "\u5546\u54c1\u79cd\u6570",
+        entryCount: "\u8fdb\u8d27\u7b14\u6570",
+        totalQuantity: "\u5f53\u65e5\u7d2f\u8ba1\u6570\u91cf",
       totalCost: "\u5f53\u65e5\u8fdb\u8d27\u603b\u989d"
     }),
     "\u6bcf\u65e5\u8fdb\u8d27\u60c5\u51b5"
@@ -2483,7 +2734,9 @@ function createWorkbookForMonthly(api, month, storeName) {
         actualReceived: "\u5b9e\u9645\u6536\u6b3e",
         memberCardAmount: "\u4f1a\u5458\u5361\u6536\u5165",
         purchaseTotal: "\u8fdb\u8d27\u603b\u989d",
-        profit: "\u9500\u552e\u51cf\u8fdb\u8d27"
+        expenseTotal: "\u652f\u51fa\u603b\u989d",
+        grossProfit: "\u6bdb\u5229\u6da6",
+        actualProfit: "\u5b9e\u9645\u5229\u6da6"
       }),
       "\u95e8\u5e97\u7ecf\u8425\u6c47\u603b"
     );
@@ -2514,9 +2767,10 @@ async function startServer(port) {
 
 if (require.main === module) {
   startServer(PORT).then(function onReady(info) {
-    console.log(STORE_NAME + "å·²å¯å? http://localhost:" + info.server.address().port);
-    console.log("åºä¸»è´¦å· owner / admin123");
-    console.log("åºåè´¦å· staff / staff123");
+    console.log(STORE_NAME + " 已启动: http://localhost:" + info.server.address().port);
+    console.log("店主账号: owner / admin123");
+    console.log("门店1账号: store1 / 123456");
+    console.log("门店2账号: store2 / 123456");
   }).catch(function onError(error) {
     console.error(error);
     process.exit(1);

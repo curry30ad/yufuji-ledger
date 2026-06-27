@@ -21,8 +21,12 @@
         <view class="stat-value">¥{{ledger.expenseTotal}}</view>
       </view>
       <view class="stat" wx:if="{{user.role === 'owner'}}">
-        <view class="stat-label">简版利润</view>
-        <view class="stat-value">¥{{ledger.profit}}</view>
+        <view class="stat-label">毛利润</view>
+        <view class="stat-value">¥{{ledger.grossProfit}}</view>
+      </view>
+      <view class="stat" wx:if="{{user.role === 'owner'}}">
+        <view class="stat-label">实际利润</view>
+        <view class="stat-value">¥{{ledger.actualProfit}}</view>
       </view>
     </view>
   </view>

@@ -16,12 +16,24 @@ const state = {
     highlightedIndex: -1,
     open: false
   },
+  purchaseDraftItems: [],
   analytics: {
     metric: "salesTotal",
     dailyRange: 30,
     data: null
   },
   receiptScan: null
+};
+
+const EXPENSE_TYPE_TEXT = {
+  purchase: "进货支出",
+  rent: "房租",
+  utilities: "水电",
+  labor: "人工",
+  packaging: "包装耗材",
+  platform_fee: "平台抽成",
+  delivery: "配送费",
+  other_daily: "其他日常支出"
 };
 
 function byId(id) {
@@ -98,6 +110,10 @@ function showMessage(message) {
   if (message) {
     window.alert(message);
   }
+}
+
+function expenseTypeText(type, label) {
+  return label || EXPENSE_TYPE_TEXT[type] || EXPENSE_TYPE_TEXT.other_daily;
 }
 
 function getSelectedStore() {
@@ -222,7 +238,7 @@ function updateOwnerVisibility() {
   });
   const activeButton = document.querySelector(".nav-btn.active");
   const hiddenSection = activeButton && activeButton.classList.contains("hidden");
-  if (!owner && (!activeButton || hiddenSection || ["overviewSection", "reportsSection", "analyticsSection", "productsSection", "purchaseProductsSection", "usersSection"].includes(activeButton.dataset.section))) {
+  if (!owner && (!activeButton || hiddenSection || ["overviewSection", "dailyReportSection", "monthlyReportSection", "analyticsSection", "productsSection", "purchaseProductsSection", "usersSection"].includes(activeButton.dataset.section))) {
     setSection("ledgerSection");
   }
 }
@@ -252,6 +268,10 @@ function tableHtml(headers, rows) {
       return "<td>" + cell + "</td>";
     }).join("") + "</tr>";
   }).join("") + "</tbody></table></div>";
+}
+
+function reportSectionHtml(title, content) {
+  return '<section class="report-section"><div class="report-section-title">' + title + "</div>" + content + "</section>";
 }
 
 function splitProductKeywords(value) {
@@ -374,7 +394,8 @@ function renderOverview() {
     { label: "今日销售总额", value: yuan(ledger.salesTotal), sub: "营业额与单品销售分开记录" },
     { label: "今日实际收款", value: yuan(ledger.actualReceived), sub: "现金、微信、支付宝、会员卡" },
     { label: "今日支出", value: yuan(ledger.expenseTotal), sub: "日常支出汇总" },
-    { label: "简版利润", value: yuan(ledger.profit), sub: "销售总额减去当日支出" }
+    { label: "今日毛利润", value: yuan(ledger.grossProfit), sub: "销售总额减去进货金额" },
+    { label: "今日实际利润", value: yuan(ledger.actualProfit), sub: "毛利润再减去支出" }
   ];
   byId("overviewCards").innerHTML = cards.map(function (item) {
     return '<article class="metric-card"><div class="label">' + item.label + '</div><div class="value">' + item.value + '</div><div class="sub">' + item.sub + "</div></article>";
@@ -393,10 +414,9 @@ function renderOverview() {
       )
     : '<div class="empty">当天还没有单品销售数据。</div>';
 
-  const expenseTypeMap = { purchase: "进货支出", daily: "日常支出" };
   byId("expenseSnapshot").innerHTML = state.overviewBundle.expenses.length
     ? '<div class="snapshot-list">' + state.overviewBundle.expenses.map(function (item) {
-        return '<div class="snapshot-item"><span>' + expenseTypeMap[item.expenseType] + (item.note ? " · " + item.note : "") + "</span><strong>" + yuan(item.amount) + "</strong></div>";
+        return '<div class="snapshot-item"><span>' + expenseTypeText(item.expenseType, item.expenseLabel) + (item.note ? " · " + item.note : "") + "</span><strong>" + yuan(item.amount) + "</strong></div>";
       }).join("") + "</div>"
     : '<div class="empty">当天还没有支出记录。</div>';
 }
@@ -414,10 +434,10 @@ function renderOverview() {
   }, 0);
   const monthMetrics = overviewMetrics.month && overviewMetrics.month.totals
     ? overviewMetrics.month
-    : { key: activeMonth, salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, profit: 0 } };
+    : { key: activeMonth, salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 } };
   const yearMetrics = overviewMetrics.year && overviewMetrics.year.totals
     ? overviewMetrics.year
-    : { key: String(activeMonth || "").slice(0, 4), salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, profit: 0 } };
+    : { key: String(activeMonth || "").slice(0, 4), salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 } };
   const dayCards = [
     { label: "\u4eca\u65e5\u9500\u552e\u603b\u989d", value: yuan(ledger.salesTotal), sub: "\u4ee5\u5f53\u5929\u5feb\u901f\u8bb0\u8d26\u4e3a\u51c6" },
     { label: "\u4eca\u65e5\u5b9e\u9645\u6536\u6b3e", value: yuan(ledger.actualReceived), sub: "\u73b0\u91d1\u3001\u5fae\u4fe1\u3001\u652f\u4ed8\u5b9d\u3001\u4f1a\u5458\u5361" },
@@ -431,7 +451,8 @@ function renderOverview() {
     { label: "\u672c\u6708\u5e73\u5747\u9500\u552e\u989d", value: yuan(monthMetrics.totals.averageSales), sub: "\u6309" + monthMetrics.key + "\u7edf\u8ba1" },
     { label: "\u672c\u6708\u4f1a\u5458\u5361\u6536\u5165", value: yuan(monthMetrics.totals.memberCardAmount), sub: "\u6309" + monthMetrics.key + "\u4f1a\u5458\u5361\u53e3\u5f84\u6c47\u603b" },
     { label: "\u672c\u6708\u603b\u8fdb\u8d27\u82b1\u8d39", value: yuan(monthMetrics.totals.purchaseTotal), sub: "\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
-    { label: "\u672c\u6708\u5229\u6da6", value: yuan(monthMetrics.totals.profit), sub: "\u9500\u552e - \u8fdb\u8d27 - \u652f\u51fa" }
+    { label: "\u672c\u6708\u6bdb\u5229\u6da6", value: yuan(monthMetrics.totals.grossProfit), sub: "\u9500\u552e - \u8fdb\u8d27" },
+    { label: "\u672c\u6708\u5b9e\u9645\u5229\u6da6", value: yuan(monthMetrics.totals.actualProfit), sub: "\u6bdb\u5229\u6da6 - \u652f\u51fa" }
   ];
   const yearCards = [
     { label: "\u672c\u5e74\u6709\u9500\u552e\u5929\u6570", value: String(yearMetrics.salesDays), sub: "\u53ea\u7edf\u8ba1\u9500\u552e\u603b\u989d\u5927\u4e8e0\u7684\u5929" },
@@ -439,7 +460,8 @@ function renderOverview() {
     { label: "\u672c\u5e74\u5e73\u5747\u9500\u552e\u989d", value: yuan(yearMetrics.totals.averageSales), sub: "\u6309" + yearMetrics.key + "\u5e74\u7edf\u8ba1" },
     { label: "\u672c\u5e74\u4f1a\u5458\u5361\u6536\u5165", value: yuan(yearMetrics.totals.memberCardAmount), sub: "\u6309" + yearMetrics.key + "\u5e74\u4f1a\u5458\u5361\u53e3\u5f84\u6c47\u603b" },
     { label: "\u672c\u5e74\u603b\u8fdb\u8d27\u82b1\u8d39", value: yuan(yearMetrics.totals.purchaseTotal), sub: "\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
-    { label: "\u672c\u5e74\u5229\u6da6", value: yuan(yearMetrics.totals.profit), sub: "\u9500\u552e - \u8fdb\u8d27 - \u652f\u51fa" }
+    { label: "\u672c\u5e74\u6bdb\u5229\u6da6", value: yuan(yearMetrics.totals.grossProfit), sub: "\u9500\u552e - \u8fdb\u8d27" },
+    { label: "\u672c\u5e74\u5b9e\u9645\u5229\u6da6", value: yuan(yearMetrics.totals.actualProfit), sub: "\u6bdb\u5229\u6da6 - \u652f\u51fa" }
   ];
   function renderMetricCards(targetId, cards) {
     byId(targetId).innerHTML = cards.map(function (item) {
@@ -456,7 +478,8 @@ function renderOverview() {
         { label: "\u533a\u95f4\u652f\u51fa\u603b\u989d", value: yuan(rangeMetrics.totals.expenseTotal), sub: "\u533a\u95f4\u5185\u652f\u51fa\u8bb0\u5f55\u6c47\u603b" },
         { label: "\u533a\u95f4\u8fdb\u8d27\u603b\u989d", value: yuan(rangeMetrics.totals.purchaseTotal), sub: "\u533a\u95f4\u5185\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
         { label: "\u533a\u95f4\u5e73\u5747\u9500\u552e\u989d", value: yuan(rangeMetrics.totals.averageSales), sub: rangeMetrics.salesDays + "\u4e2a\u6709\u9500\u552e\u65e5" },
-        { label: "\u533a\u95f4\u5229\u6da6", value: yuan(rangeMetrics.totals.profit), sub: "\u9500\u552e - \u8fdb\u8d27 - \u652f\u51fa" },
+        { label: "\u533a\u95f4\u6bdb\u5229\u6da6", value: yuan(rangeMetrics.totals.grossProfit), sub: "\u9500\u552e - \u8fdb\u8d27" },
+        { label: "\u533a\u95f4\u5b9e\u9645\u5229\u6da6", value: yuan(rangeMetrics.totals.actualProfit), sub: "\u6bdb\u5229\u6da6 - \u652f\u51fa" },
         { label: "\u533a\u95f4\u5b9e\u9645\u6536\u6b3e", value: yuan(rangeMetrics.totals.actualReceived), sub: "\u6309\u8bb0\u8d26\u5df2\u5f55\u5165\u7684\u5b9e\u6536\u53e3\u5f84" }
       ]
     : [];
@@ -480,10 +503,297 @@ function renderOverview() {
       )
     : '<div class="empty">\u5f53\u5929\u8fd8\u6ca1\u6709\u5355\u54c1\u9500\u552e\u6570\u636e\u3002</div>';
 
-  const expenseTypeMap = { purchase: "\u8fdb\u8d27\u652f\u51fa", daily: "\u65e5\u5e38\u652f\u51fa" };
   byId("expenseSnapshot").innerHTML = state.overviewBundle.expenses.length
     ? '<div class="snapshot-list">' + state.overviewBundle.expenses.map(function (item) {
-        return '<div class="snapshot-item"><span>' + expenseTypeMap[item.expenseType] + (item.note ? " | " + item.note : "") + "</span><strong>" + yuan(item.amount) + "</strong></div>";
+        return '<div class="snapshot-item"><span>' + expenseTypeText(item.expenseType, item.expenseLabel) + (item.note ? " | " + item.note : "") + "</span><strong>" + yuan(item.amount) + "</strong></div>";
+      }).join("") + "</div>"
+    : '<div class="empty">\u5f53\u5929\u8fd8\u6ca1\u6709\u652f\u51fa\u8bb0\u5f55\u3002</div>';
+}
+
+function toNumber(value) {
+  return Number(value || 0);
+}
+
+function ratioPercent(part, total) {
+  if (!total) {
+    return 0;
+  }
+  return (toNumber(part) / toNumber(total)) * 100;
+}
+
+function formatPercent(value) {
+  if (!isFinite(value)) {
+    return "--";
+  }
+  return Number(value).toFixed(1) + "%";
+}
+
+function aggregateExpensesByType(expenses) {
+  const grouped = {};
+  (expenses || []).forEach(function collect(item) {
+    const type = item.expenseType || "other_daily";
+    if (!grouped[type]) {
+      grouped[type] = {
+        type: type,
+        label: expenseTypeText(type, item.expenseLabel),
+        amount: 0
+      };
+    }
+    grouped[type].amount += toNumber(item.amount);
+  });
+  return Object.keys(grouped).map(function mapItem(key) {
+    return grouped[key];
+  }).sort(function sortItem(a, b) {
+    return b.amount - a.amount;
+  });
+}
+
+function buildOverviewAlerts(ledger, monthMetrics, dayPurchaseTotal) {
+  const alerts = [];
+  const salesTotal = toNumber(ledger.salesTotal);
+  const actualReceived = toNumber(ledger.actualReceived);
+  const grossProfit = toNumber(ledger.grossProfit);
+  const actualProfit = toNumber(ledger.actualProfit);
+  const expenseTotal = toNumber(ledger.expenseTotal);
+  const monthSalesTotal = toNumber(monthMetrics.totals.salesTotal);
+  const monthGrossProfit = toNumber(monthMetrics.totals.grossProfit);
+  const monthActualProfit = toNumber(monthMetrics.totals.actualProfit);
+  const monthExpenseTotal = toNumber(monthMetrics.totals.expenseTotal);
+  const monthSalesDays = toNumber(monthMetrics.salesDays);
+
+  if (monthSalesDays >= 3 && monthActualProfit < 0) {
+    alerts.push({
+      tone: "danger",
+      title: "本月累计实际利润仍为负",
+      detail: "本月毛利 " + yuan(monthGrossProfit) + "，但支出累计 " + yuan(monthExpenseTotal) + "，当前实际利润为 " + yuan(monthActualProfit) + "。"
+    });
+  }
+  if (monthSalesDays >= 3 && monthGrossProfit < 0) {
+    alerts.push({
+      tone: "danger",
+      title: "本月毛利已经转负",
+      detail: "本月销售额低于进货成本，建议先核对售价、折扣和进货是否集中在本月入账。"
+    });
+  }
+  if (monthGrossProfit > 0 && monthExpenseTotal > monthGrossProfit * 0.55) {
+    alerts.push({
+      tone: "warn",
+      title: "本月支出吃掉了大半毛利",
+      detail: "本月支出相当于本月毛利的 " + formatPercent(ratioPercent(monthExpenseTotal, monthGrossProfit)) + "。"
+    });
+  }
+  if (monthSalesTotal > 0 && monthSalesDays < 5) {
+    alerts.push({
+      tone: "info",
+      title: "本月销售天数还偏少",
+      detail: "当前只有 " + monthSalesDays + " 个有销售日期，本月利润判断还会继续波动。"
+    });
+  }
+  if (salesTotal > 0 && Math.abs(salesTotal - actualReceived) > Math.max(50, salesTotal * 0.15)) {
+    alerts.push({
+      tone: "warn",
+      title: "今日销售额和实收差距偏大",
+      detail: "当前差额 " + yuan(actualReceived - salesTotal) + "，建议核对退款、抹零和会员卡口径。"
+    });
+  }
+  if (actualProfit < 0) {
+    alerts.push({
+      tone: "warn",
+      title: "今日实际利润为负",
+      detail: "今天毛利 " + yuan(grossProfit) + "，支出 " + yuan(expenseTotal) + "，当天结果已经转负。"
+    });
+  }
+  if (salesTotal > 0 && toNumber(dayPurchaseTotal) === 0) {
+    alerts.push({
+      tone: "info",
+      title: "今天没有新增进货记录",
+      detail: "如果今天实际有补货但未入账，毛利会被高估。"
+    });
+  }
+  if (!alerts.length) {
+    alerts.push({
+      tone: "good",
+      title: "本月和今天都没有明显异常",
+      detail: "本月利润、支出结构和今天的收款口径看起来都比较正常。"
+    });
+  }
+  return alerts.slice(0, 4);
+}
+
+function renderAlertGroup(title, items, bucketClass) {
+  if (!items.length) {
+    return "";
+  }
+  return [
+    '<section class="alert-group ' + bucketClass + '">',
+    '  <div class="alert-group-title">' + title + '</div>',
+    '  <div class="alert-list">' + items.map(function mapAlert(item) {
+      return [
+        '<article class="alert-item alert-' + item.tone + '">',
+        '  <strong>' + item.title + '</strong>',
+        '  <p>' + item.detail + '</p>',
+        '</article>'
+      ].join("");
+    }).join("") + '</div>',
+    '</section>'
+  ].join("");
+}
+
+function renderOverview() {
+  if (!state.overviewBundle || !isOwner()) {
+    return;
+  }
+  const ledger = state.overviewBundle.ledger;
+  const overviewMetrics = state.overviewBundle.overviewMetrics || {};
+  const rangeMetrics = state.overviewRange || null;
+  const activeMonth = byId("activeMonth").value;
+  const dayPurchaseTotal = (state.purchases || []).reduce(function sumPurchaseTotal(total, item) {
+    return total + Number(item.totalCost || 0);
+  }, 0);
+  const monthMetrics = overviewMetrics.month && overviewMetrics.month.totals
+    ? overviewMetrics.month
+    : { key: activeMonth, salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 } };
+  const yearMetrics = overviewMetrics.year && overviewMetrics.year.totals
+    ? overviewMetrics.year
+    : { key: String(activeMonth || "").slice(0, 4), salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 } };
+  const salesTotal = toNumber(ledger.salesTotal);
+  const grossProfit = toNumber(ledger.grossProfit);
+  const actualProfit = toNumber(ledger.actualProfit);
+  const expenseTotal = toNumber(ledger.expenseTotal);
+  const monthSalesTotal = toNumber(monthMetrics.totals.salesTotal);
+  const monthGrossProfit = toNumber(monthMetrics.totals.grossProfit);
+  const monthActualProfit = toNumber(monthMetrics.totals.actualProfit);
+  const monthExpenseTotal = toNumber(monthMetrics.totals.expenseTotal);
+  const yearSalesTotal = toNumber(yearMetrics.totals.salesTotal);
+  const yearGrossProfit = toNumber(yearMetrics.totals.grossProfit);
+  const yearActualProfit = toNumber(yearMetrics.totals.actualProfit);
+  const alerts = buildOverviewAlerts(ledger, monthMetrics, dayPurchaseTotal);
+  const grossMargin = formatPercent(ratioPercent(monthGrossProfit, monthSalesTotal));
+  const actualMargin = formatPercent(ratioPercent(monthActualProfit, monthSalesTotal));
+  const monthExpenseRatio = formatPercent(ratioPercent(monthExpenseTotal, monthSalesTotal));
+  const yearGrossMargin = formatPercent(ratioPercent(yearGrossProfit, yearSalesTotal));
+  const yearActualMargin = formatPercent(ratioPercent(yearActualProfit, yearSalesTotal));
+
+  byId("overviewProfitFocus").innerHTML = [
+    '<div class="profit-focus-main">',
+    '  <div class="profit-main-kicker">本月实际利润</div>',
+    '  <div class="profit-main-value">' + yuan(monthActualProfit) + '</div>',
+    '  <div class="profit-main-sub">本月毛利 ' + yuan(monthGrossProfit) + '，再减去本月支出 ' + yuan(monthExpenseTotal) + '</div>',
+    '</div>',
+    '<div class="profit-focus-grid-inner">',
+    '  <article class="profit-stat-card">',
+    '    <span>本月毛利</span>',
+    '    <strong>' + yuan(monthGrossProfit) + '</strong>',
+    '    <small>毛利率 ' + grossMargin + '</small>',
+    '  </article>',
+    '  <article class="profit-stat-card">',
+    '    <span>本月实际利润</span>',
+    '    <strong>' + yuan(monthActualProfit) + '</strong>',
+    '    <small>实际利润率 ' + actualMargin + '</small>',
+    '  </article>',
+    '  <article class="profit-stat-card">',
+    '    <span>本月销售总额</span>',
+    '    <strong>' + yuan(monthSalesTotal) + '</strong>',
+    '    <small>有销售 ' + monthMetrics.salesDays + ' 天</small>',
+    '  </article>',
+    '  <article class="profit-stat-card">',
+    '    <span>本月支出拖累</span>',
+    '    <strong>' + yuan(monthExpenseTotal) + '</strong>',
+    '    <small>占本月销售额 ' + monthExpenseRatio + '</small>',
+    '  </article>',
+    '  <article class="profit-stat-card">',
+    '    <span>本年毛利</span>',
+    '    <strong>' + yuan(yearGrossProfit) + '</strong>',
+    '    <small>毛利率 ' + yearGrossMargin + '</small>',
+    '  </article>',
+    '  <article class="profit-stat-card">',
+    '    <span>本年实际利润</span>',
+    '    <strong>' + yuan(yearActualProfit) + '</strong>',
+    '    <small>实际利润率 ' + yearActualMargin + '</small>',
+    '  </article>',
+    '</div>'
+  ].join("");
+
+  const riskAlerts = alerts.filter(function filterRisk(item) {
+    return item.tone === "danger";
+  });
+  const checkAlerts = alerts.filter(function filterCheck(item) {
+    return item.tone === "warn" || item.tone === "info";
+  });
+  const normalAlerts = alerts.filter(function filterNormal(item) {
+    return item.tone === "good";
+  });
+  byId("overviewAlerts").innerHTML = [
+    renderAlertGroup("风险提醒", riskAlerts, "alert-group-risk"),
+    renderAlertGroup("需要核对", checkAlerts, "alert-group-check"),
+    renderAlertGroup("正常", normalAlerts, "alert-group-normal")
+  ].join("") || '<div class="empty">暂时没有可用提醒。</div>';
+
+  const dayCards = [
+    { label: "\u4eca\u65e5\u9500\u552e\u603b\u989d", value: yuan(ledger.salesTotal), sub: "\u4ee5\u5f53\u5929\u5feb\u901f\u8bb0\u8d26\u4e3a\u51c6" },
+    { label: "\u4eca\u65e5\u5b9e\u9645\u6536\u6b3e", value: yuan(ledger.actualReceived), sub: "\u73b0\u91d1\u3001\u5fae\u4fe1\u3001\u652f\u4ed8\u5b9d\u3001\u4f1a\u5458\u5361" },
+    { label: "\u4eca\u65e5\u652f\u51fa", value: yuan(ledger.expenseTotal), sub: "\u5f53\u5929\u652f\u51fa\u5408\u8ba1" },
+    { label: "\u5f53\u65e5\u8fdb\u8d27\u652f\u51fa", value: yuan(dayPurchaseTotal), sub: "\u6309\u5f53\u5929\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
+    { label: "\u4eca\u65e5\u4f1a\u5458\u5361\u6536\u5165", value: yuan(ledger.memberCardAmount), sub: "\u5f53\u5929\u5df2\u8bb0\u5f55\u7684\u4f1a\u5458\u5361\u6536\u5165" }
+  ];
+  const monthCards = [
+    { label: "\u672c\u6708\u6709\u9500\u552e\u5929\u6570", value: String(monthMetrics.salesDays), sub: "\u53ea\u7edf\u8ba1\u9500\u552e\u603b\u989d\u5927\u4e8e0\u7684\u5929" },
+    { label: "\u672c\u6708\u9500\u552e\u603b\u989d", value: yuan(monthMetrics.totals.salesTotal), sub: "\u6309" + monthMetrics.key + "\u9500\u552e\u603b\u989d\u6c47\u603b" },
+    { label: "\u672c\u6708\u5e73\u5747\u9500\u552e\u989d", value: yuan(monthMetrics.totals.averageSales), sub: "\u6309" + monthMetrics.key + "\u7edf\u8ba1" },
+    { label: "\u672c\u6708\u4f1a\u5458\u5361\u6536\u5165", value: yuan(monthMetrics.totals.memberCardAmount), sub: "\u6309" + monthMetrics.key + "\u4f1a\u5458\u5361\u53e3\u5f84\u6c47\u603b" },
+    { label: "\u672c\u6708\u603b\u8fdb\u8d27\u82b1\u8d39", value: yuan(monthMetrics.totals.purchaseTotal), sub: "\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
+    { label: "\u672c\u6708\u6bdb\u5229\u6da6", value: yuan(monthMetrics.totals.grossProfit), sub: "\u9500\u552e - \u8fdb\u8d27" },
+    { label: "\u672c\u6708\u5b9e\u9645\u5229\u6da6", value: yuan(monthMetrics.totals.actualProfit), sub: "\u6bdb\u5229\u6da6 - \u652f\u51fa" }
+  ];
+  const yearCards = [
+    { label: "\u672c\u5e74\u6709\u9500\u552e\u5929\u6570", value: String(yearMetrics.salesDays), sub: "\u53ea\u7edf\u8ba1\u9500\u552e\u603b\u989d\u5927\u4e8e0\u7684\u5929" },
+    { label: "\u672c\u5e74\u9500\u552e\u603b\u989d", value: yuan(yearMetrics.totals.salesTotal), sub: "\u6309" + yearMetrics.key + "\u5e74\u9500\u552e\u603b\u989d\u6c47\u603b" },
+    { label: "\u672c\u5e74\u5e73\u5747\u9500\u552e\u989d", value: yuan(yearMetrics.totals.averageSales), sub: "\u6309" + yearMetrics.key + "\u5e74\u7edf\u8ba1" },
+    { label: "\u672c\u5e74\u4f1a\u5458\u5361\u6536\u5165", value: yuan(yearMetrics.totals.memberCardAmount), sub: "\u6309" + yearMetrics.key + "\u5e74\u4f1a\u5458\u5361\u53e3\u5f84\u6c47\u603b" },
+    { label: "\u672c\u5e74\u603b\u8fdb\u8d27\u82b1\u8d39", value: yuan(yearMetrics.totals.purchaseTotal), sub: "\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
+    { label: "\u672c\u5e74\u6bdb\u5229\u6da6", value: yuan(yearMetrics.totals.grossProfit), sub: "\u9500\u552e - \u8fdb\u8d27" },
+    { label: "\u672c\u5e74\u5b9e\u9645\u5229\u6da6", value: yuan(yearMetrics.totals.actualProfit), sub: "\u6bdb\u5229\u6da6 - \u652f\u51fa" }
+  ];
+  function renderMetricCards(targetId, cards) {
+    byId(targetId).innerHTML = cards.map(function (item) {
+      return '<article class="metric-card"><div class="label">' + item.label + '</div><div class="value">' + item.value + '</div><div class="sub">' + item.sub + "</div></article>";
+    }).join("");
+  }
+  renderMetricCards("overviewDayCards", dayCards);
+  renderMetricCards("overviewMonthCards", monthCards);
+  renderMetricCards("overviewYearCards", yearCards);
+  const rangeCards = rangeMetrics
+    ? [
+        { label: "\u533a\u95f4\u9500\u552e\u603b\u989d", value: yuan(rangeMetrics.totals.salesTotal), sub: "\u4ece" + rangeMetrics.fromDate + "\u5230" + rangeMetrics.toDate },
+        { label: "\u533a\u95f4\u4f1a\u5458\u5361\u6536\u5165", value: yuan(rangeMetrics.totals.memberCardAmount), sub: "\u533a\u95f4\u5185\u4f1a\u5458\u5361\u6536\u5165\u6c47\u603b" },
+        { label: "\u533a\u95f4\u652f\u51fa\u603b\u989d", value: yuan(rangeMetrics.totals.expenseTotal), sub: "\u533a\u95f4\u5185\u652f\u51fa\u8bb0\u5f55\u6c47\u603b" },
+        { label: "\u533a\u95f4\u8fdb\u8d27\u603b\u989d", value: yuan(rangeMetrics.totals.purchaseTotal), sub: "\u533a\u95f4\u5185\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
+        { label: "\u533a\u95f4\u5e73\u5747\u9500\u552e\u989d", value: yuan(rangeMetrics.totals.averageSales), sub: rangeMetrics.salesDays + "\u4e2a\u6709\u9500\u552e\u65e5" },
+        { label: "\u533a\u95f4\u6bdb\u5229\u6da6", value: yuan(rangeMetrics.totals.grossProfit), sub: "\u9500\u552e - \u8fdb\u8d27" },
+        { label: "\u533a\u95f4\u5b9e\u9645\u5229\u6da6", value: yuan(rangeMetrics.totals.actualProfit), sub: "\u6bdb\u5229\u6da6 - \u652f\u51fa" },
+        { label: "\u533a\u95f4\u5b9e\u9645\u6536\u6b3e", value: yuan(rangeMetrics.totals.actualReceived), sub: "\u6309\u8bb0\u8d26\u5df2\u5f55\u5165\u7684\u5b9e\u6536\u53e3\u5f84" }
+      ]
+    : [];
+  renderMetricCards("overviewRangeCards", rangeCards);
+  byId("overviewRangeMeta").textContent = rangeMetrics
+    ? "\u67e5\u8be2\u533a\u95f4\uff1a" + rangeMetrics.fromDate + " \u81f3 " + rangeMetrics.toDate + "\uff0c\u6709\u9500\u552e\u6570\u636e " + rangeMetrics.salesDays + " \u5929\u3002"
+    : "";
+  byId("topProductsTable").innerHTML = state.overviewBundle.topProducts.length
+    ? tableHtml(
+        ["\u5546\u54c1", "\u9500\u91cf", "\u91d1\u989d"],
+        state.overviewBundle.topProducts.map(function (item) {
+          return [
+            item.name + ' <span class="pill">' + (item.saleMode === "weight" ? "\u6309\u91cd\u91cf" : "\u6309\u4efd\u6570") + "</span>",
+            item.totalQuantity + item.unit,
+            yuan(item.totalAmount)
+          ];
+        })
+      )
+    : '<div class="empty">\u5f53\u5929\u8fd8\u6ca1\u6709\u5355\u54c1\u9500\u552e\u6570\u636e\u3002</div>';
+
+  byId("expenseSnapshot").innerHTML = (state.overviewBundle.expenses || []).length
+    ? '<div class="snapshot-list">' + (state.overviewBundle.expenses || []).map(function (item) {
+        return '<div class="snapshot-item"><span>' + expenseTypeText(item.expenseType, item.expenseLabel) + (item.note ? " | " + item.note : "") + "</span><strong>" + yuan(item.amount) + "</strong></div>";
       }).join("") + "</div>"
     : '<div class="empty">\u5f53\u5929\u8fd8\u6ca1\u6709\u652f\u51fa\u8bb0\u5f55\u3002</div>';
 }
@@ -533,10 +843,9 @@ function renderExpenses() {
   if (!state.ledgerBundle) {
     return;
   }
-  const typeMap = { purchase: "进货支出", daily: "日常支出" };
   const rows = state.ledgerBundle.expenses.map(function (item) {
     return [
-      typeMap[item.expenseType] || item.expenseType,
+      expenseTypeText(item.expenseType, item.expenseLabel),
       yuan(item.amount),
       item.note || "-",
       '<button class="ghost small-btn" data-expense-edit="' + item.id + '">编辑</button> ' +
@@ -551,6 +860,7 @@ function renderExpenses() {
 function renderPurchases() {
   const rows = state.purchases.map(function (item) {
     return [
+      item.purchaseOrderNo || "-",
       item.productName,
       item.quantity + (item.unit ? "（" + item.unit + "）" : ""),
       yuan(item.unitCost),
@@ -562,7 +872,7 @@ function renderPurchases() {
     ];
   });
   byId("purchasesTable").innerHTML = rows.length
-    ? tableHtml(["进货商品", "数量", "进货单价", "进货总额", "供应商", "备注", "操作"], rows)
+    ? tableHtml(["进货单号", "进货商品", "数量", "进货单价", "进货总额", "供应商", "备注", "操作"], rows)
     : '<div class="empty">当天还没有进货记录。</div>';
 }
 
@@ -654,7 +964,7 @@ function renderReports() {
     ["实际收款", yuan(daily.actualReceived)],
     ["会员卡收入", yuan(daily.memberCardAmount)],
     ["支出合计", yuan(daily.expenseTotal)],
-    ["简版利润", yuan(daily.profit)],
+    ["进货合计", yuan(daily.purchaseTotal)],
     ["现金 / 微信 / 支付宝 / 会员卡", yuan(daily.cashAmount) + " / " + yuan(daily.wechatAmount) + " / " + yuan(daily.alipayAmount) + " / " + yuan(daily.memberCardAmount)],
     ["退款 / 抹零", yuan(daily.refundAmount) + " / " + yuan(daily.roundingAmount)]
   ].map(function (item) {
@@ -667,7 +977,8 @@ function renderReports() {
     ["本月实际收款", yuan(monthly.totals.actualReceived)],
     ["本月会员卡收入", yuan(monthly.totals.memberCardAmount)],
     ["本月支出合计", yuan(monthly.totals.expenseTotal)],
-    ["本月简版利润", yuan(monthly.totals.profit)],
+    ["本月毛利润", yuan(monthly.totals.grossProfit)],
+    ["本月实际利润", yuan(monthly.totals.actualProfit)],
     ["录入天数", String(monthly.days.length)],
     ["本月进货总额", yuan((monthly.purchaseSummary && monthly.purchaseSummary.totalCost) || 0)],
     ["本月进货笔数", String((monthly.purchaseSummary && monthly.purchaseSummary.entryCount) || 0)]
@@ -676,13 +987,13 @@ function renderReports() {
   }).join("") + "</div>";
 
   const topHtml = monthly.topProducts.length
-    ? tableHtml(
+    ? reportSectionHtml("热销商品汇总", tableHtml(
         ["热销商品", "累计销量", "累计金额"],
         monthly.topProducts.map(function (item) {
           return [item.name, item.totalQuantity + item.unit, yuan(item.totalAmount)];
         })
-      )
-    : '<div class="empty">本月还没有单品排行数据。</div>';
+      ))
+    : reportSectionHtml("热销商品汇总", '<div class="empty">本月还没有单品排行数据。</div>');
 
   const purchaseHtml = monthly.purchases && monthly.purchases.length
     ? tableHtml(
@@ -699,9 +1010,9 @@ function renderReports() {
   if (storeTarget) {
     storeTarget.innerHTML = monthly.storeSalesSummary && monthly.storeSalesSummary.length
       ? tableHtml(
-          ["门店", "销售总额", "实际收款", "进货总额", "销售减进货"],
+          ["门店", "销售总额", "实际收款", "进货总额", "毛利润"],
           monthly.storeSalesSummary.map(function (item) {
-            return [item.storeName, yuan(item.salesTotal), yuan(item.actualReceived), yuan(item.purchaseTotal), yuan(item.profit)];
+            return [item.storeName, yuan(item.salesTotal), yuan(item.actualReceived), yuan(item.purchaseTotal), yuan(item.grossProfit)];
           })
         )
       : '<div class="empty">当前是单门店视图，或暂时没有门店经营汇总数据。</div>';
@@ -718,7 +1029,7 @@ function renderReports() {
     ["实际收款", yuan(daily.actualReceived)],
     ["会员卡收入", yuan(daily.memberCardAmount)],
     ["支出合计", yuan(daily.expenseTotal)],
-    ["简版利润", yuan(daily.profit)],
+    ["进货合计", yuan(daily.purchaseTotal)],
     ["现金 / 微信 / 支付宝 / 会员卡", yuan(daily.cashAmount) + " / " + yuan(daily.wechatAmount) + " / " + yuan(daily.alipayAmount) + " / " + yuan(daily.memberCardAmount)],
     ["退款 / 抹零", yuan(daily.refundAmount) + " / " + yuan(daily.roundingAmount)]
   ].map(function (item) {
@@ -731,9 +1042,12 @@ function renderReports() {
     ["本月实际收款", yuan(monthly.totals.actualReceived)],
     ["本月会员卡收入", yuan(monthly.totals.memberCardAmount)],
     ["本月支出合计", yuan(monthly.totals.expenseTotal)],
-    ["本月简版利润", yuan(monthly.totals.profit)],
+    ["本月进货合计", yuan(monthly.totals.purchaseTotal)],
+    ["本月毛利润", yuan(monthly.totals.grossProfit)],
+    ["本月实际利润", yuan(monthly.totals.actualProfit)],
     ["录入天数", String(monthly.days.length)],
     ["本月进货总额", yuan((monthly.purchaseSummary && monthly.purchaseSummary.totalCost) || 0)],
+    ["本月进货单数", String((monthly.purchaseSummary && monthly.purchaseSummary.orderCount) || 0)],
     ["本月进货笔数", String((monthly.purchaseSummary && monthly.purchaseSummary.entryCount) || 0)],
     ["本月进货商品种数", String((monthly.purchaseSummary && monthly.purchaseSummary.productCount) || 0)]
   ].map(function (item) {
@@ -750,7 +1064,7 @@ function renderReports() {
     : '<div class="empty">本月还没有单品排行数据。</div>';
 
   const purchaseProductSummaryHtml = monthly.purchaseProductSummary && monthly.purchaseProductSummary.length
-    ? tableHtml(
+    ? reportSectionHtml("进货商品汇总", tableHtml(
         ["进货商品", "月累计数量", "单位", "月累计进货额", "进货笔数", "最近进价", "供应商"],
         monthly.purchaseProductSummary.map(function (item) {
           return [
@@ -763,33 +1077,34 @@ function renderReports() {
             item.supplierSummary || "-"
           ];
         })
-      )
-    : '<div class="empty">本月还没有进货商品汇总。</div>';
+      ))
+    : reportSectionHtml("进货商品汇总", '<div class="empty">本月还没有进货商品汇总。</div>');
 
   const purchaseDailySummaryHtml = monthly.purchaseDailySummary && monthly.purchaseDailySummary.length
-    ? tableHtml(
-        ["日期", "门店", "商品种数", "进货笔数", "当日累计数量", "当日进货总额"],
+    ? reportSectionHtml("每日进货汇总", tableHtml(
+        ["日期", "门店", "进货单数", "商品种数", "进货笔数", "当日累计数量", "当日进货总额"],
         monthly.purchaseDailySummary.map(function (item) {
           return [
             item.date,
             item.storeName || "-",
+            String(item.orderCount || 0),
             String(item.productCount),
             String(item.entryCount),
             String(item.totalQuantity),
             yuan(item.totalCost)
           ];
         })
-      )
-    : '<div class="empty">本月还没有每日进货情况。</div>';
+      ))
+    : reportSectionHtml("每日进货汇总", '<div class="empty">本月还没有每日进货情况。</div>');
 
   const purchaseHtml = monthly.purchases && monthly.purchases.length
-    ? tableHtml(
-        ["日期", "门店", "进货商品", "数量", "进货总额", "供应商"],
+    ? reportSectionHtml("进货明细", tableHtml(
+        ["日期", "门店", "进货单号", "进货商品", "数量", "进货总额", "供应商"],
         monthly.purchases.map(function (item) {
-          return [item.date, item.storeName, item.productName, item.quantity + (item.unit ? "（" + item.unit + "）" : ""), yuan(item.totalCost), item.supplier || "-"];
+          return [item.date, item.storeName, item.purchaseOrderNo || "-", item.productName, item.quantity + (item.unit ? "（" + item.unit + "）" : ""), yuan(item.totalCost), item.supplier || "-"];
         })
-      )
-    : '<div class="empty">本月还没有进货明细。</div>';
+      ))
+    : reportSectionHtml("进货明细", '<div class="empty">本月还没有进货明细。</div>');
 
   byId("monthlyReport").innerHTML = monthHtml + topHtml + purchaseProductSummaryHtml + purchaseDailySummaryHtml + purchaseHtml;
 
@@ -797,9 +1112,9 @@ function renderReports() {
   if (storeTarget) {
     storeTarget.innerHTML = monthly.storeSalesSummary && monthly.storeSalesSummary.length
       ? tableHtml(
-          ["门店", "销售总额", "实际收款", "进货总额", "销售减进货"],
+          ["门店", "销售总额", "实际收款", "进货总额", "支出总额", "经营利润"],
           monthly.storeSalesSummary.map(function (item) {
-            return [item.storeName, yuan(item.salesTotal), yuan(item.actualReceived), yuan(item.purchaseTotal), yuan(item.profit)];
+            return [item.storeName, yuan(item.salesTotal), yuan(item.actualReceived), yuan(item.purchaseTotal), yuan(item.expenseTotal || 0), yuan(item.actualProfit)];
           })
         )
       : '<div class="empty">当前是单门店视图，或暂时没有门店经营汇总数据。</div>';
@@ -826,7 +1141,8 @@ function renderBarChart(targetId, series) {
   const maxValue = Math.max.apply(null, series.map(function (item) {
     return item.value;
   }));
-  byId(targetId).innerHTML = '<div class="chart-shell"><div class="chart-grid">' + series.map(function (item) {
+  const chartMinWidth = Math.max(series.length * 70, 1000);
+  byId(targetId).innerHTML = '<div class="chart-shell"><div class="chart-grid" style="min-width:' + chartMinWidth + 'px">' + series.map(function (item) {
     const height = maxValue === 0 ? 6 : Math.max(6, Math.round((item.value / maxValue) * 220));
     return '<div class="chart-bar-wrap"><div class="chart-value">' + yuan(item.value) + '</div><div class="chart-bar" style="height:' + height + 'px"></div><div class="chart-label">' + item.label + '</div></div>';
   }).join("") + "</div></div>";
@@ -1034,11 +1350,73 @@ function resetSaleForm() {
   updateSaleProductOptions();
 }
 
+function readPurchaseLineFromForm(form) {
+  const productName = String(form.elements.productName.value || "").trim();
+  const quantity = Number(form.elements.quantity.value || 0);
+  const unitCost = Number(form.elements.unitCost.value || 0);
+  if (!productName || quantity <= 0) {
+    return null;
+  }
+  return {
+    productName: productName,
+    quantity: quantity,
+    unit: String(form.elements.unit.value || "").trim(),
+    unitCost: unitCost,
+    totalCost: form.elements.totalCost.value === ""
+      ? Number((quantity * unitCost).toFixed(2))
+      : Number(form.elements.totalCost.value || 0)
+  };
+}
+
+function clearPurchaseLineFields(form) {
+  form.elements.productName.value = "";
+  form.elements.quantity.value = "";
+  form.elements.unit.value = "";
+  form.elements.unitCost.value = "";
+  form.elements.totalCost.value = "";
+  closePurchaseProductSuggestions();
+}
+
+function renderPurchaseDraft() {
+  const target = byId("purchaseDraftTable");
+  if (!target) {
+    return;
+  }
+  if (!state.purchaseDraftItems.length) {
+    target.innerHTML = '<div class="empty">当前还没有加入本单的商品，直接保存时会按当前表单内容记一条进货。</div>';
+    return;
+  }
+  const rows = state.purchaseDraftItems.map(function (item, index) {
+    return [
+      item.productName,
+      item.quantity + (item.unit ? "（" + item.unit + "）" : ""),
+      yuan(item.unitCost),
+      yuan(item.totalCost),
+      '<button type="button" class="ghost small-btn" data-purchase-draft-remove="' + index + '">移除</button>'
+    ];
+  });
+  target.innerHTML = tableHtml(["商品", "数量", "进货单价", "进货总额", "操作"], rows);
+}
+
+function addPurchaseDraftItem() {
+  const form = byId("purchaseForm");
+  const item = readPurchaseLineFromForm(form);
+  if (!item) {
+    showMessage("请先填写完整的商品、数量和进价，再加入本单。");
+    return;
+  }
+  state.purchaseDraftItems.push(item);
+  clearPurchaseLineFields(form);
+  renderPurchaseDraft();
+}
+
 function resetPurchaseForm() {
   const form = byId("purchaseForm");
   form.reset();
   form.elements.id.value = "";
-  form.elements.unit.value = "1";
+  form.elements.purchaseOrderNo.value = "";
+  state.purchaseDraftItems = [];
+  renderPurchaseDraft();
   closePurchaseProductSuggestions();
 }
 
@@ -1046,7 +1424,7 @@ function resetExpenseForm() {
   const form = byId("expenseForm");
   form.reset();
   form.elements.id.value = "";
-  form.elements.expenseType.value = "purchase";
+  form.elements.expenseType.value = "other_daily";
 }
 
 function resetUserForm() {
@@ -1125,6 +1503,7 @@ function fillPurchaseForm(purchaseId) {
   }
   const form = byId("purchaseForm");
   form.elements.id.value = item.id;
+  form.elements.purchaseOrderNo.value = item.purchaseOrderNo || "";
   form.elements.productName.value = item.productName;
   form.elements.quantity.value = item.quantity;
   form.elements.unit.value = item.unit || "";
@@ -1132,6 +1511,8 @@ function fillPurchaseForm(purchaseId) {
   form.elements.totalCost.value = item.totalCost;
   form.elements.supplier.value = item.supplier || "";
   form.elements.note.value = item.note || "";
+  state.purchaseDraftItems = [];
+  renderPurchaseDraft();
   closePurchaseProductSuggestions();
   setSection("purchasesSection");
 }
@@ -1231,6 +1612,7 @@ async function loadDashboardData() {
   fillLedgerForm();
   renderSales();
   renderPurchases();
+  renderPurchaseDraft();
   renderReceiptRecognition();
   renderExpenses();
   if (isOwner()) {
@@ -1313,22 +1695,55 @@ async function submitLedgerForm(event) {
     return;
   }
   const form = event.currentTarget;
+  const refundAmount = form.elements.refundAmount.value;
+  const roundingAmount = form.elements.roundingAmount.value;
+  let salesTotal = form.elements.salesTotal.value;
+  let actualReceived = form.elements.actualReceived.value;
+  const noRefundOrRounding = money(refundAmount) === 0 && money(roundingAmount) === 0;
+  if (noRefundOrRounding) {
+    if (!String(salesTotal || "").trim() && String(actualReceived || "").trim()) {
+      salesTotal = actualReceived;
+      form.elements.salesTotal.value = actualReceived;
+    } else if (!String(actualReceived || "").trim() && String(salesTotal || "").trim()) {
+      actualReceived = salesTotal;
+      form.elements.actualReceived.value = salesTotal;
+    }
+  }
   await request("/api/ledger/" + byId("activeDate").value, {
     method: "PUT",
     body: JSON.stringify({
-      salesTotal: form.elements.salesTotal.value,
-      actualReceived: form.elements.actualReceived.value,
+      salesTotal: salesTotal,
+      actualReceived: actualReceived,
       cashAmount: form.elements.cashAmount.value,
       wechatAmount: form.elements.wechatAmount.value,
       alipayAmount: form.elements.alipayAmount.value,
       memberCardAmount: form.elements.memberCardAmount.value,
-      refundAmount: form.elements.refundAmount.value,
-      roundingAmount: form.elements.roundingAmount.value,
+      refundAmount: refundAmount,
+      roundingAmount: roundingAmount,
       note: form.elements.note.value,
       storeName: getSelectedStore()
     })
   });
   await loadDashboardData();
+}
+
+function syncLedgerSalesAndReceived() {
+  const form = byId("ledgerForm");
+  if (!form) {
+    return;
+  }
+  const refundAmount = form.elements.refundAmount.value;
+  const roundingAmount = form.elements.roundingAmount.value;
+  if (money(refundAmount) !== 0 || money(roundingAmount) !== 0) {
+    return;
+  }
+  const salesTotal = String(form.elements.salesTotal.value || "").trim();
+  const actualReceived = String(form.elements.actualReceived.value || "").trim();
+  if (!salesTotal && actualReceived) {
+    form.elements.salesTotal.value = actualReceived;
+  } else if (!actualReceived && salesTotal) {
+    form.elements.actualReceived.value = salesTotal;
+  }
 }
 
 async function submitSaleForm(event) {
@@ -1360,16 +1775,25 @@ async function submitPurchaseForm(event) {
   }
   const form = event.currentTarget;
   const editingId = form.elements.id.value;
-  const unitText = form.elements.unit.value.trim();
-  await request(editingId ? "/api/purchases/" + editingId : "/api/purchases", {
+  const currentItem = readPurchaseLineFromForm(form);
+  const items = editingId
+    ? []
+    : state.purchaseDraftItems.concat(currentItem ? [currentItem] : []);
+  if (!editingId && !items.length) {
+    showMessage("请至少填写一条进货商品，或先加入本单后再保存。");
+    return;
+  }
+  const response = await request(editingId ? "/api/purchases/" + editingId : "/api/purchases", {
     method: editingId ? "PUT" : "POST",
     body: JSON.stringify({
       date: byId("activeDate").value,
-      productName: form.elements.productName.value,
-      quantity: form.elements.quantity.value,
-      unit: unitText,
-      unitCost: form.elements.unitCost.value,
-      totalCost: form.elements.totalCost.value,
+      purchaseOrderNo: form.elements.purchaseOrderNo.value,
+      productName: currentItem ? currentItem.productName : form.elements.productName.value,
+      quantity: currentItem ? currentItem.quantity : form.elements.quantity.value,
+      unit: currentItem ? currentItem.unit : String(form.elements.unit.value || "").trim(),
+      unitCost: currentItem ? currentItem.unitCost : form.elements.unitCost.value,
+      totalCost: currentItem ? currentItem.totalCost : form.elements.totalCost.value,
+      items: editingId ? undefined : items,
       supplier: form.elements.supplier.value,
       note: form.elements.note.value,
       storeName: getSelectedStore()
@@ -1377,6 +1801,9 @@ async function submitPurchaseForm(event) {
   });
   resetPurchaseForm();
   await loadDashboardData();
+  if (response && response.createdCount > 1) {
+    showMessage("已按进货单 " + response.purchaseOrderNo + " 保存 " + response.createdCount + " 个商品。");
+  }
 }
 
 async function submitExpenseForm(event) {
@@ -1619,6 +2046,12 @@ async function handleBodyClick(event) {
     await importReceiptItems();
     return;
   }
+  const purchaseDraftRemoveIndex = event.target.getAttribute("data-purchase-draft-remove");
+  if (purchaseDraftRemoveIndex !== null) {
+    state.purchaseDraftItems.splice(Number(purchaseDraftRemoveIndex), 1);
+    renderPurchaseDraft();
+    return;
+  }
 
   const saleEditId = event.target.getAttribute("data-sale-edit");
   const saleDeleteId = event.target.getAttribute("data-sale-delete");
@@ -1747,8 +2180,13 @@ async function bootstrap() {
   });
 
   byId("ledgerForm").addEventListener("submit", submitLedgerForm);
+  byId("ledgerForm").elements.salesTotal.addEventListener("blur", syncLedgerSalesAndReceived);
+  byId("ledgerForm").elements.actualReceived.addEventListener("blur", syncLedgerSalesAndReceived);
+  byId("ledgerForm").elements.refundAmount.addEventListener("blur", syncLedgerSalesAndReceived);
+  byId("ledgerForm").elements.roundingAmount.addEventListener("blur", syncLedgerSalesAndReceived);
   byId("saleForm").addEventListener("submit", submitSaleForm);
   byId("purchaseForm").addEventListener("submit", submitPurchaseForm);
+  byId("addPurchaseDraftBtn").addEventListener("click", addPurchaseDraftItem);
   byId("purchaseProductNameInput").addEventListener("input", handlePurchaseProductInput);
   byId("purchaseProductNameInput").addEventListener("focus", handlePurchaseProductFocus);
   byId("purchaseProductNameInput").addEventListener("keydown", handlePurchaseProductKeydown);
@@ -1767,6 +2205,7 @@ async function bootstrap() {
   byId("resetUserBtn").addEventListener("click", resetUserForm);
   resetPurchaseForm();
   resetPurchaseProductForm();
+  resetExpenseForm();
 
   byId("activeDate").addEventListener("change", function () {
     state.receiptScan = null;

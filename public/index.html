@@ -9,51 +9,89 @@
 <body>
   <div id="app">
     <section id="loginView" class="login-shell">
-      <div class="login-card">
-        <p class="eyebrow">于福记熟食店记账网页应用</p>
-        <h1>电脑和手机都能操作</h1>
-        <p class="muted">支持营业额、单品销售、进货、支出、日报月报与 Excel 导出。</p>
-        <form id="loginForm" class="stack">
-          <label>
-            <span>账号</span>
-            <input name="username" placeholder="owner 或店员账号" required>
-          </label>
-          <label>
-            <span>密码</span>
-            <input name="password" type="password" placeholder="请输入密码" required>
-          </label>
-          <button type="submit" class="primary">登录系统</button>
-        </form>
-        <div class="tip-box">
-          <div>管理员账号：<strong>owner / admin123</strong></div>
-          <div>示例店员账号：<strong>store1 / 123456</strong></div>
+      <div class="login-showcase">
+        <div class="login-story">
+          <p class="eyebrow">于福记熟食店经营台</p>
+          <div class="showcase-grid">
+            <article class="showcase-card">
+              <span>今日看板</span>
+              <strong>营业、进货、支出一眼看全</strong>
+            </article>
+            <article class="showcase-card">
+              <span>进货工作流</span>
+              <strong>一张进货单可连续录多个商品</strong>
+            </article>
+            <article class="showcase-card">
+              <span>经营分析</span>
+              <strong>月报和区间走势更适合老板复盘</strong>
+            </article>
+          </div>
         </div>
-        <p id="loginError" class="error-text"></p>
+        <div class="login-card">
+          <p class="eyebrow">登录系统</p>
+          <h2>开始今天的记账</h2>
+          <form id="loginForm" class="stack">
+            <label>
+              <span>账号</span>
+              <input name="username" placeholder="owner 或店员账号" required>
+            </label>
+            <label>
+              <span>密码</span>
+              <input name="password" type="password" placeholder="请输入密码" required>
+            </label>
+            <button type="submit" class="primary">登录系统</button>
+          </form>
+          <div class="tip-box">
+            <div>管理员账号：<strong>owner / admin123</strong></div>
+            <div>示例店员账号：<strong>store1 / 123456</strong></div>
+          </div>
+          <p id="loginError" class="error-text"></p>
+        </div>
       </div>
     </section>
 
     <section id="dashboardView" class="hidden">
       <header class="topbar">
-        <div>
+        <div class="topbar-copy">
           <p class="eyebrow">于福记熟食店记账系统</p>
           <h2 id="welcomeText">经营总览</h2>
         </div>
         <div class="topbar-actions">
+          <span class="status-chip">本地运行中</span>
           <button id="logoutBtn" class="ghost">退出</button>
         </div>
       </header>
 
       <main class="layout">
         <aside class="sidebar">
-          <button class="nav-btn owner-only" data-section="overviewSection">经营总览</button>
-          <button class="nav-btn active" data-section="ledgerSection">快速记账</button>
-          <button class="nav-btn" data-section="salesSection">单品销售</button>
-          <button class="nav-btn" data-section="purchasesSection">进货记账</button>
-          <button class="nav-btn" data-section="expensesSection">支出记录</button>
-          <button class="nav-btn owner-only" data-section="reportsSection">日报月报</button>
-          <button class="nav-btn owner-only" data-section="analyticsSection">经营分析</button>
-          <button class="nav-btn owner-only" data-section="productsSection">商品管理</button>
-          <button class="nav-btn owner-only" data-section="usersSection">账号管理</button>
+          <div class="sidebar-brand">
+            <p class="sidebar-kicker">经营工作台</p>
+            <h3>于福记熟食店</h3>
+          </div>
+          <div class="nav-group owner-only">
+            <div class="nav-group-label">经营看板</div>
+            <button class="nav-btn owner-only" data-section="overviewSection">经营总览</button>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-label">日常录入</div>
+            <button class="nav-btn active" data-section="ledgerSection">快速记账</button>
+            <button class="nav-btn" data-section="salesSection">单品销售</button>
+            <button class="nav-btn" data-section="purchasesSection">进货记账</button>
+            <button class="nav-btn" data-section="expensesSection">支出记录</button>
+          </div>
+          <div class="nav-group owner-only">
+            <div class="nav-group-label">复盘报表</div>
+            <div class="nav-subnav">
+              <button class="nav-btn nav-sub-btn" data-section="dailyReportSection">日报</button>
+              <button class="nav-btn nav-sub-btn" data-section="monthlyReportSection">月报</button>
+            </div>
+          </div>
+          <div class="nav-group owner-only">
+            <div class="nav-group-label">基础管理</div>
+            <button class="nav-btn owner-only" data-section="analyticsSection">经营分析</button>
+            <button class="nav-btn owner-only" data-section="productsSection">商品管理</button>
+            <button class="nav-btn owner-only" data-section="usersSection">账号管理</button>
+          </div>
         </aside>
 
         <section class="content">
@@ -76,6 +114,20 @@
           </div>
 
           <section id="overviewSection" class="page-section hidden owner-only">
+            <div class="overview-focus-grid">
+              <article class="panel profit-focus-panel">
+                <div class="panel-head">
+                  <h3>利润看板</h3>
+                </div>
+                <div id="overviewProfitFocus"></div>
+              </article>
+              <article class="panel alert-panel">
+                <div class="panel-head">
+                  <h3>异常提醒</h3>
+                </div>
+                <div id="overviewAlerts"></div>
+              </article>
+            </div>
             <div class="overview-groups">
               <article class="panel">
                 <div class="panel-head">
@@ -207,6 +259,7 @@
               </div>
               <form id="purchaseForm" class="form-grid">
                 <input name="id" type="hidden">
+                <label><span>进货单号</span><input name="purchaseOrderNo" placeholder="留空则保存时自动生成"></label>
                 <label class="purchase-product-field">
                   <span>进货商品</span>
                   <div class="purchase-autocomplete">
@@ -221,8 +274,13 @@
                 <label><span>供应商</span><input name="supplier" placeholder="可留空"></label>
                 <label class="full"><span>备注</span><input name="note" placeholder="例如：早市补货、整箱采购"></label>
                 <div class="full form-actions">
+                  <button type="button" id="addPurchaseDraftBtn" class="ghost">加入本单</button>
                   <button type="submit" class="primary">保存进货记录</button>
                   <button type="button" id="resetPurchaseBtn" class="ghost">取消编辑</button>
+                </div>
+                <div class="full">
+                  <h4>本单商品</h4>
+                  <div id="purchaseDraftTable"></div>
                 </div>
               </form>
             </article>
@@ -245,7 +303,13 @@
                   <span>支出类型</span>
                   <select name="expenseType" required>
                     <option value="purchase">进货支出</option>
-                    <option value="daily">日常支出</option>
+                    <option value="rent">房租</option>
+                    <option value="utilities">水电</option>
+                    <option value="labor">人工</option>
+                    <option value="packaging">包装耗材</option>
+                    <option value="platform_fee">平台抽成</option>
+                    <option value="delivery">配送费</option>
+                    <option value="other_daily">其他日常支出</option>
                   </select>
                 </label>
                 <label>
@@ -270,23 +334,24 @@
             </article>
           </section>
 
-          <section id="reportsSection" class="page-section hidden owner-only">
-            <div class="double-grid">
-              <article class="panel">
-                <div class="panel-head">
-                  <h3>日报</h3>
-                  <button id="exportDailyBtn" class="ghost">导出日报 Excel</button>
-                </div>
-                <div id="dailyReport"></div>
-              </article>
-              <article class="panel">
-                <div class="panel-head">
-                  <h3>月报</h3>
-                  <button id="exportMonthlyBtn" class="ghost">导出月报 Excel</button>
-                </div>
-                <div id="monthlyReport"></div>
-              </article>
-            </div>
+          <section id="dailyReportSection" class="page-section hidden owner-only">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>日报</h3>
+                <button id="exportDailyBtn" class="ghost">导出日报 Excel</button>
+              </div>
+              <div id="dailyReport"></div>
+            </article>
+          </section>
+
+          <section id="monthlyReportSection" class="page-section hidden owner-only">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>月报</h3>
+                <button id="exportMonthlyBtn" class="ghost">导出月报 Excel</button>
+              </div>
+              <div id="monthlyReport"></div>
+            </article>
             <article class="panel">
               <div class="panel-head">
                 <h3>门店经营情况</h3>
