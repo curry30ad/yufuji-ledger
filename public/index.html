@@ -196,6 +196,7 @@
                 <label><span>会员卡收入</span><input name="memberCardAmount" type="number" step="0.01" required></label>
                 <label><span>退款</span><input name="refundAmount" type="number" step="0.01" required></label>
                 <label><span>抹零</span><input name="roundingAmount" type="number" step="0.01" required></label>
+                <label><span>期末剩余库存进货金额</span><input name="inventoryAmount" type="number" step="0.01" min="0" placeholder="还压在店里的进货成本"></label>
                 <label class="full"><span>备注</span><textarea name="note" rows="3" placeholder="例如：午市活动、团购订单"></textarea></label>
                 <div class="full form-actions">
                   <button type="submit" class="primary">保存营业数据</button>
@@ -331,6 +332,12 @@
                 <h3>当天支出明细</h3>
               </div>
               <div id="expensesTable"></div>
+            </article>
+            <article class="panel">
+              <div class="panel-head">
+                <h3>月度支出统计</h3>
+              </div>
+              <div id="monthlyExpenseSummary"></div>
             </article>
           </section>
 

@@ -11,6 +11,7 @@ const state = {
   ledgerBundle: null,
   purchases: [],
   monthlySummary: null,
+  monthlyExpenseSummary: null,
   purchaseAutocomplete: {
     items: [],
     highlightedIndex: -1,
@@ -804,7 +805,7 @@ function fillLedgerForm() {
   }
   const ledger = state.ledgerBundle.ledger;
   const form = byId("ledgerForm");
-  ["salesTotal", "actualReceived", "cashAmount", "wechatAmount", "alipayAmount", "memberCardAmount", "refundAmount", "roundingAmount"].forEach(function (key) {
+  ["salesTotal", "actualReceived", "cashAmount", "wechatAmount", "alipayAmount", "memberCardAmount", "refundAmount", "roundingAmount", "inventoryAmount"].forEach(function (key) {
     form.elements[key].value = ledger[key];
   });
   form.elements.note.value = ledger.note || "";
@@ -855,6 +856,55 @@ function renderExpenses() {
   byId("expensesTable").innerHTML = rows.length
     ? tableHtml(["类型", "金额", "备注", "操作"], rows)
     : '<div class="empty">当天还没有支出记录。</div>';
+}
+
+function renderMonthlyExpenseSummary() {
+  const monthlyTarget = byId("monthlyExpenseSummary");
+  if (!monthlyTarget) {
+    return;
+  }
+  const monthly = state.monthlyExpenseSummary;
+  if (!monthly) {
+    monthlyTarget.innerHTML = '<div class="empty">暂时还没有月度支出统计。</div>';
+    return;
+  }
+
+  const overviewHtml = '<div class="report-list">' + [
+    ["本月支出合计", yuan((monthly.totals && monthly.totals.totalAmount) || 0)],
+    ["本月支出笔数", String((monthly.totals && monthly.totals.entryCount) || 0)],
+    ["单笔平均支出", yuan((monthly.totals && monthly.totals.averageAmount) || 0)]
+  ].map(function (item) {
+    return '<div class="report-item"><span>' + item[0] + '</span><strong>' + item[1] + '</strong></div>';
+  }).join("") + "</div>";
+
+  const typeHtml = monthly.typeSummary && monthly.typeSummary.length
+    ? reportSectionHtml("按类型汇总", tableHtml(
+        ["支出类型", "本月金额", "本月笔数"],
+        monthly.typeSummary.map(function (item) {
+          return [expenseTypeText(item.expenseType, item.expenseLabel), yuan(item.amount), String(item.entryCount)];
+        })
+      ))
+    : reportSectionHtml("按类型汇总", '<div class="empty">本月还没有支出分类汇总。</div>');
+
+  const dailyHtml = monthly.dailySummary && monthly.dailySummary.length
+    ? reportSectionHtml("按日期汇总", tableHtml(
+        ["日期", "当日支出", "当日笔数"],
+        monthly.dailySummary.map(function (item) {
+          return [item.date, yuan(item.amount), String(item.entryCount)];
+        })
+      ))
+    : reportSectionHtml("按日期汇总", '<div class="empty">本月还没有每日支出统计。</div>');
+
+  const detailHtml = monthly.entries && monthly.entries.length
+    ? reportSectionHtml("支出明细", tableHtml(
+        ["日期", "类型", "金额", "备注"],
+        monthly.entries.map(function (item) {
+          return [item.date, expenseTypeText(item.expenseType, item.expenseLabel), yuan(item.amount), item.note || "-"];
+        })
+      ))
+    : reportSectionHtml("支出明细", '<div class="empty">本月还没有支出明细。</div>');
+
+  monthlyTarget.innerHTML = overviewHtml + typeHtml + dailyHtml + detailHtml;
 }
 
 function renderPurchases() {
@@ -1577,7 +1627,8 @@ async function loadDashboardData() {
     request("/api/products?includeInactive=" + (isOwner() ? "true" : "false")),
     request("/api/purchase-products?includeInactive=" + (isOwner() ? "true" : "false")),
     request("/api/ledger/" + date + (storeQuery ? "?" + storeQuery : "")),
-    request("/api/purchases/" + date + (storeQuery ? "?" + storeQuery : ""))
+    request("/api/purchases/" + date + (storeQuery ? "?" + storeQuery : "")),
+    request("/api/expenses-monthly?month=" + encodeURIComponent(byId("activeMonth").value) + (storeQuery ? "&" + storeQuery : ""))
   ];
   if (isOwner()) {
     requests.push(request("/api/ledger/" + date + "?storeName=all&month=" + encodeURIComponent(byId("activeMonth").value)));
@@ -1598,16 +1649,17 @@ async function loadDashboardData() {
   state.purchaseProducts = results[1].items || [];
   state.ledgerBundle = results[2];
   state.purchases = results[3].items || [];
+  state.monthlyExpenseSummary = results[4] || null;
   var purchaseProductInput = byId("purchaseProductNameInput");
   if (purchaseProductInput && normalizeProductMatchText(purchaseProductInput.value)) {
     updatePurchaseProductSuggestions(purchaseProductInput.value, state.purchaseAutocomplete.highlightedIndex);
   } else {
     closePurchaseProductSuggestions();
   }
-  state.overviewBundle = isOwner() ? results[4] : results[2];
-  state.monthlySummary = isOwner() ? results[5] : null;
-  state.overviewRange = isOwner() ? results[6] : null;
-  state.analytics.data = isOwner() ? results[7] : null;
+  state.overviewBundle = isOwner() ? results[5] : results[2];
+  state.monthlySummary = isOwner() ? results[6] : null;
+  state.overviewRange = isOwner() ? results[7] : null;
+  state.analytics.data = isOwner() ? results[8] : null;
   updateSaleProductOptions();
   fillLedgerForm();
   renderSales();
@@ -1615,6 +1667,7 @@ async function loadDashboardData() {
   renderPurchaseDraft();
   renderReceiptRecognition();
   renderExpenses();
+  renderMonthlyExpenseSummary();
   if (isOwner()) {
     renderOverview();
     renderProducts();
@@ -1679,6 +1732,7 @@ function logout() {
   state.ledgerBundle = null;
   state.purchases = [];
   state.monthlySummary = null;
+  state.monthlyExpenseSummary = null;
   state.purchaseAutocomplete.items = [];
   state.purchaseAutocomplete.highlightedIndex = -1;
   state.purchaseAutocomplete.open = false;
@@ -1720,6 +1774,7 @@ async function submitLedgerForm(event) {
       memberCardAmount: form.elements.memberCardAmount.value,
       refundAmount: refundAmount,
       roundingAmount: roundingAmount,
+      inventoryAmount: form.elements.inventoryAmount.value,
       note: form.elements.note.value,
       storeName: getSelectedStore()
     })

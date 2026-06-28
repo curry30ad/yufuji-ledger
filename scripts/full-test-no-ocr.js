@@ -70,6 +70,7 @@ async function main() {
       cashAmount: 90,
       wechatAmount: 100,
       alipayAmount: 100,
+      inventoryAmount: 40,
       refundAmount: 10,
       roundingAmount: 0,
       note: "门店1日报",
@@ -81,6 +82,7 @@ async function main() {
       cashAmount: 180,
       wechatAmount: 150,
       alipayAmount: 150,
+      inventoryAmount: 0,
       refundAmount: 20,
       roundingAmount: 0,
       note: "门店2日报",
@@ -148,6 +150,7 @@ async function main() {
       cashAmount: 30,
       wechatAmount: 50,
       alipayAmount: 0,
+      inventoryAmount: 27,
       refundAmount: 0,
       roundingAmount: 0,
       note: "门店1次日日报",
@@ -180,12 +183,22 @@ async function main() {
     const monthlyStore1 = await request(context.port, "GET", "/api/reports/monthly?month=" + month + "&storeName=" + encodeURIComponent("门店1"), null, ownerToken);
     const rangeStore1 = await request(context.port, "GET", "/api/overview-range?fromDate=" + date + "&toDate=" + date + "&storeName=" + encodeURIComponent("门店1"), null, ownerToken);
     assert(ledgerStore1.ledger.purchaseTotal === 110, "daily purchase total should include all purchase lines");
-    assert(ledgerStore1.ledger.grossProfit === 190, "daily gross profit should be sales minus purchases");
-    assert(ledgerStore1.ledger.actualProfit === 170, "daily actual profit should be gross profit minus expenses");
-    assert(monthlyStore1.totals.grossProfit === 243, "monthly gross profit should use the same formula");
-    assert(monthlyStore1.totals.actualProfit === 223, "monthly actual profit should use the same formula");
-    assert(rangeStore1.totals.grossProfit === 190, "range gross profit should use the same formula");
-    assert(rangeStore1.totals.actualProfit === 170, "range actual profit should use the same formula");
+    assert(ledgerStore1.ledger.endingInventoryAmount === 40, "daily ending inventory amount should be returned");
+    assert(ledgerStore1.ledger.costOfGoodsSold === 70, "daily cost of goods sold should subtract ending inventory");
+    assert(ledgerStore1.ledger.grossProfit === 230, "daily gross profit should use adjusted sold cost");
+    assert(ledgerStore1.ledger.actualProfit === 210, "daily actual profit should use adjusted sold cost");
+    assert(monthlyStore1.totals.openingInventoryAmount === 0, "monthly totals should include opening inventory amount");
+    assert(monthlyStore1.totals.endingInventoryAmount === 27, "monthly totals should include ending inventory amount");
+    assert(monthlyStore1.totals.costOfGoodsSold === 110, "monthly cost of goods sold should use opening plus purchases minus ending inventory");
+    assert(monthlyStore1.totals.grossProfit === 270, "monthly gross profit should use inventory-adjusted sold cost");
+    assert(monthlyStore1.totals.actualProfit === 250, "monthly actual profit should use inventory-adjusted sold cost");
+    const monthlyExpenseSummary = await request(context.port, "GET", "/api/expenses-monthly?month=" + month + "&storeName=all", null, ownerToken);
+    assert(monthlyExpenseSummary.totals.totalAmount === 60, "monthly expense summary should return all-store monthly expense total");
+    assert(monthlyExpenseSummary.totals.entryCount === 2, "monthly expense summary should count all-store expense entries");
+    assert(monthlyExpenseSummary.typeSummary.length === 2, "monthly expense summary should group expenses by type");
+    assert(rangeStore1.totals.costOfGoodsSold === 70, "range cost of goods sold should use ending inventory");
+    assert(rangeStore1.totals.grossProfit === 230, "range gross profit should use inventory-adjusted sold cost");
+    assert(rangeStore1.totals.actualProfit === 210, "range actual profit should use inventory-adjusted sold cost");
 
     assert(Array.isArray(ledgerStore1.inventorySummary), "ledger should expose inventory summary");
     const inventoryDay1Duck = ledgerStore1.inventorySummary.find(function findItem(item) {
@@ -205,9 +218,11 @@ async function main() {
     });
     const staffToken = staffLogin.token;
     const staffLedger = await request(context.port, "GET", "/api/ledger/" + date, null, staffToken);
+    const staffMonthlyExpense = await request(context.port, "GET", "/api/expenses-monthly?month=" + month, null, staffToken);
     assert(staffLedger.ledger.salesTotal === 300, "staff should only see own store ledger");
     assert(staffLedger.ledger.grossProfit === null, "staff should not see gross profit fields");
     assert(staffLedger.ledger.actualProfit === null, "staff should not see actual profit fields");
+    assert(staffMonthlyExpense.totals.totalAmount === 20, "staff monthly expense summary should be scoped to own store");
 
     const store2Ledger = await request(context.port, "GET", "/api/ledger/" + date + "?storeName=" + encodeURIComponent("门店2"), null, ownerToken);
     const store2Sale = store2Ledger.sales[0];

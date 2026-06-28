@@ -236,6 +236,62 @@ function buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal) {
   };
 }
 
+function getLatestInventoryAmountBeforeDate(api, date, storeName) {
+  const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
+  if (normalizedStoreName) {
+    const row = api.one(
+      "SELECT inventory_amount FROM daily_ledgers WHERE store_name = ? AND ledger_date < ? ORDER BY ledger_date DESC LIMIT 1",
+      [normalizedStoreName, date]
+    );
+    return money(row ? row.inventory_amount : 0);
+  }
+
+  const stores = getAvailableStores(api);
+  return money(stores.reduce(function sumStoreInventory(total, itemStoreName) {
+    const row = api.one(
+      "SELECT inventory_amount FROM daily_ledgers WHERE store_name = ? AND ledger_date < ? ORDER BY ledger_date DESC LIMIT 1",
+      [itemStoreName, date]
+    );
+    return total + money(row ? row.inventory_amount : 0);
+  }, 0));
+}
+
+function getLatestInventoryAmountOnOrBeforeDate(api, date, storeName) {
+  const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
+  if (normalizedStoreName) {
+    const row = api.one(
+      "SELECT inventory_amount FROM daily_ledgers WHERE store_name = ? AND ledger_date <= ? ORDER BY ledger_date DESC LIMIT 1",
+      [normalizedStoreName, date]
+    );
+    return money(row ? row.inventory_amount : 0);
+  }
+
+  const stores = getAvailableStores(api);
+  return money(stores.reduce(function sumStoreInventory(total, itemStoreName) {
+    const row = api.one(
+      "SELECT inventory_amount FROM daily_ledgers WHERE store_name = ? AND ledger_date <= ? ORDER BY ledger_date DESC LIMIT 1",
+      [itemStoreName, date]
+    );
+    return total + money(row ? row.inventory_amount : 0);
+  }, 0));
+}
+
+function buildPeriodProfitMetrics(api, salesTotal, purchaseTotal, expenseTotal, fromDate, toDate, storeName) {
+  const openingInventoryAmount = getLatestInventoryAmountBeforeDate(api, fromDate, storeName);
+  const endingInventoryAmount = getLatestInventoryAmountOnOrBeforeDate(api, toDate, storeName);
+  const costOfGoodsSold = money(openingInventoryAmount + money(purchaseTotal) - endingInventoryAmount);
+  const profitMetrics = buildProfitMetrics(salesTotal, costOfGoodsSold, expenseTotal);
+  return {
+    purchaseTotal: money(purchaseTotal),
+    openingInventoryAmount: openingInventoryAmount,
+    endingInventoryAmount: endingInventoryAmount,
+    costOfGoodsSold: costOfGoodsSold,
+    grossProfit: profitMetrics.grossProfit,
+    actualProfit: profitMetrics.actualProfit,
+    profit: profitMetrics.actualProfit
+  };
+}
+
 function normalizePurchaseItemPayload(item) {
   const payload = item || {};
   const quantity = money(payload.quantity);
@@ -335,6 +391,7 @@ function createSchema(api) {
       member_card_amount REAL NOT NULL DEFAULT 0,
       refund_amount REAL NOT NULL DEFAULT 0,
       rounding_amount REAL NOT NULL DEFAULT 0,
+      inventory_amount REAL NOT NULL DEFAULT 0,
       note TEXT NOT NULL DEFAULT '',
       created_by INTEGER,
       updated_by INTEGER,
@@ -644,6 +701,7 @@ function migrateSchema(api) {
   ensureColumn(api, "purchase_entries", "supplier TEXT NOT NULL DEFAULT ''");
   ensureDailyLedgerCompositeKey(api);
   ensureColumn(api, "daily_ledgers", "member_card_amount REAL NOT NULL DEFAULT 0");
+  ensureColumn(api, "daily_ledgers", "inventory_amount REAL NOT NULL DEFAULT 0");
   api.raw.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_products_name ON purchase_products(name)");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_sale_entries_date_store ON sale_entries(sale_date, store_name)");
   api.raw.exec("CREATE INDEX IF NOT EXISTS idx_expense_entries_date_store ON expense_entries(expense_date, store_name)");
@@ -1327,13 +1385,16 @@ function getMonthlyStoreSalesSummary(api, month) {
     const salesTotal = money(row.sales_total);
     const purchaseTotal = money(purchaseMap[storeName] || 0);
     const expenseTotal = money(expenseMap[storeName] || 0);
-    const profitMetrics = buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal);
+    const profitMetrics = buildPeriodProfitMetrics(api, salesTotal, purchaseTotal, expenseTotal, fromDate, toDate, storeName);
     return {
       storeName: storeName,
       salesTotal: salesTotal,
       actualReceived: money(row.actual_received),
       purchaseTotal: purchaseTotal,
+      costOfGoodsSold: profitMetrics.costOfGoodsSold,
       expenseTotal: expenseTotal,
+      openingInventoryAmount: profitMetrics.openingInventoryAmount,
+      endingInventoryAmount: profitMetrics.endingInventoryAmount,
       grossProfit: profitMetrics.grossProfit,
       actualProfit: profitMetrics.actualProfit,
       profit: profitMetrics.actualProfit
@@ -1500,7 +1561,7 @@ function getLedgerBundle(api, date, storeName) {
   const purchaseTotal = purchases.reduce(function sum(total, item) {
     return total + item.totalCost;
   }, 0);
-  const profitMetrics = buildProfitMetrics(ledger.sales_total, purchaseTotal, expenseTotal);
+  const profitMetrics = buildPeriodProfitMetrics(api, ledger.sales_total, purchaseTotal, expenseTotal, ledger.ledger_date, ledger.ledger_date, normalizedStoreName);
 
   return {
     ledger: {
@@ -1515,9 +1576,13 @@ function getLedgerBundle(api, date, storeName) {
       memberCardAmount: money(ledger.member_card_amount),
       refundAmount: money(ledger.refund_amount),
       roundingAmount: money(ledger.rounding_amount),
+      inventoryAmount: money(ledger.inventory_amount),
       note: ledger.note || (Array.isArray(ledger.notes) ? ledger.notes.join(" | ") : ""),
       expenseTotal: money(expenseTotal),
       purchaseTotal: money(purchaseTotal),
+      openingInventoryAmount: profitMetrics.openingInventoryAmount,
+      endingInventoryAmount: profitMetrics.endingInventoryAmount,
+      costOfGoodsSold: profitMetrics.costOfGoodsSold,
       grossProfit: profitMetrics.grossProfit,
       actualProfit: profitMetrics.actualProfit,
       profit: profitMetrics.actualProfit
@@ -1565,7 +1630,7 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
     const salesTotal = money(row.sales_total);
     const expenseTotal = money(expenseMap[row.ledger_date] || 0);
     const purchaseTotal = money(purchaseMap[row.ledger_date] || 0);
-    const profitMetrics = buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal);
+    const profitMetrics = buildPeriodProfitMetrics(api, salesTotal, purchaseTotal, expenseTotal, row.ledger_date, row.ledger_date, normalizedStoreName);
     return {
       date: row.ledger_date,
       salesTotal: salesTotal,
@@ -1573,6 +1638,9 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
       memberCardAmount: money(row.member_card_amount),
       expenseTotal: expenseTotal,
       purchaseTotal: purchaseTotal,
+      costOfGoodsSold: profitMetrics.costOfGoodsSold,
+      openingInventoryAmount: profitMetrics.openingInventoryAmount,
+      endingInventoryAmount: profitMetrics.endingInventoryAmount,
       grossProfit: profitMetrics.grossProfit,
       actualProfit: profitMetrics.actualProfit,
       profit: profitMetrics.actualProfit
@@ -1595,6 +1663,15 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
   const salesDays = days.filter(function filterSalesDay(day) {
     return day.salesTotal > 0;
   }).length;
+  const periodProfitMetrics = buildPeriodProfitMetrics(
+    api,
+    totals.salesTotal,
+    totals.purchaseTotal,
+    totals.expenseTotal,
+    fromDate,
+    toDate,
+    normalizedStoreName
+  );
 
   return {
     fromDate: fromDate,
@@ -1607,9 +1684,12 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
       expenseTotal: money(totals.expenseTotal),
       purchaseTotal: money(totals.purchaseTotal),
       averageSales: salesDays ? money(totals.salesTotal / salesDays) : 0,
-      grossProfit: money(totals.grossProfit),
-      actualProfit: money(totals.actualProfit),
-      profit: money(totals.actualProfit)
+      openingInventoryAmount: periodProfitMetrics.openingInventoryAmount,
+      endingInventoryAmount: periodProfitMetrics.endingInventoryAmount,
+      costOfGoodsSold: periodProfitMetrics.costOfGoodsSold,
+      grossProfit: periodProfitMetrics.grossProfit,
+      actualProfit: periodProfitMetrics.actualProfit,
+      profit: periodProfitMetrics.actualProfit
     },
     days: days
   };
@@ -1657,7 +1737,7 @@ function getMonthlySummary(api, month, storeName) {
     const expenseTotal = money(expenseMap[row.ledger_date] || 0);
     const purchaseTotal = money(purchaseMap[row.ledger_date] || 0);
     const salesTotal = money(row.sales_total);
-    const profitMetrics = buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal);
+    const profitMetrics = buildPeriodProfitMetrics(api, salesTotal, purchaseTotal, expenseTotal, row.ledger_date, row.ledger_date, normalizedStoreName);
     return {
       date: row.ledger_date,
       storeName: normalizedStoreName || "All Stores",
@@ -1666,6 +1746,9 @@ function getMonthlySummary(api, month, storeName) {
       memberCardAmount: money(row.member_card_amount),
       expenseTotal: expenseTotal,
       purchaseTotal: purchaseTotal,
+      costOfGoodsSold: profitMetrics.costOfGoodsSold,
+      openingInventoryAmount: profitMetrics.openingInventoryAmount,
+      endingInventoryAmount: profitMetrics.endingInventoryAmount,
       grossProfit: profitMetrics.grossProfit,
       actualProfit: profitMetrics.actualProfit,
       profit: profitMetrics.actualProfit
@@ -1689,6 +1772,15 @@ function getMonthlySummary(api, month, storeName) {
   const purchaseSummary = getMonthlyPurchaseSummary(api, month, normalizedStoreName);
   const purchaseProductSummary = getMonthlyPurchaseProductSummary(api, month, normalizedStoreName);
   const purchaseDailySummary = getMonthlyPurchaseDailySummary(api, month, normalizedStoreName);
+  const periodProfitMetrics = buildPeriodProfitMetrics(
+    api,
+    totals.salesTotal,
+    totals.purchaseTotal,
+    totals.expenseTotal,
+    fromDate,
+    toDate,
+    normalizedStoreName
+  );
 
   return {
     month: month,
@@ -1698,9 +1790,12 @@ function getMonthlySummary(api, month, storeName) {
       memberCardAmount: money(totals.memberCardAmount),
       expenseTotal: money(totals.expenseTotal),
       purchaseTotal: money(totals.purchaseTotal),
-      grossProfit: money(totals.grossProfit),
-      actualProfit: money(totals.actualProfit),
-      profit: money(totals.actualProfit)
+      openingInventoryAmount: periodProfitMetrics.openingInventoryAmount,
+      endingInventoryAmount: periodProfitMetrics.endingInventoryAmount,
+      costOfGoodsSold: periodProfitMetrics.costOfGoodsSold,
+      grossProfit: periodProfitMetrics.grossProfit,
+      actualProfit: periodProfitMetrics.actualProfit,
+      profit: periodProfitMetrics.actualProfit
     },
     days: days,
     purchases: monthlyPurchases,
@@ -1762,6 +1857,73 @@ function getMonthlyExpenseEntries(api, month, storeName) {
       updatedAt: row.updated_at
     };
   });
+}
+
+function getMonthlyExpenseSummary(api, month, storeName) {
+  const entries = getMonthlyExpenseEntries(api, month, storeName);
+  const totals = entries.reduce(function reduceTotals(acc, item) {
+    acc.totalAmount += money(item.amount);
+    acc.entryCount += 1;
+    return acc;
+  }, { totalAmount: 0, entryCount: 0 });
+
+  const typeMap = {};
+  const dailyMap = {};
+  entries.forEach(function collect(item) {
+    const typeKey = item.expenseType || "other_daily";
+    if (!typeMap[typeKey]) {
+      typeMap[typeKey] = {
+        expenseType: typeKey,
+        expenseLabel: item.expenseLabel || expenseTypeLabel(typeKey),
+        amount: 0,
+        entryCount: 0
+      };
+    }
+    typeMap[typeKey].amount = money((typeMap[typeKey].amount || 0) + money(item.amount));
+    typeMap[typeKey].entryCount = (typeMap[typeKey].entryCount || 0) + 1;
+
+    if (!dailyMap[item.date]) {
+      dailyMap[item.date] = {
+        date: item.date,
+        amount: 0,
+        entryCount: 0
+      };
+    }
+    dailyMap[item.date].amount = money(dailyMap[item.date].amount + money(item.amount));
+    dailyMap[item.date].entryCount += 1;
+  });
+
+  const typeSummary = Object.keys(typeMap).map(function mapType(key) {
+    const item = typeMap[key];
+    return {
+      expenseType: item.expenseType,
+      expenseLabel: item.expenseLabel,
+      amount: money(item.amount),
+      entryCount: item.entryCount
+    };
+  }).sort(function sortType(a, b) {
+    return b.amount - a.amount;
+  });
+
+  const dailySummary = Object.keys(dailyMap).sort().map(function mapDay(key) {
+    return {
+      date: key,
+      amount: money(dailyMap[key].amount),
+      entryCount: dailyMap[key].entryCount
+    };
+  });
+
+  return {
+    month: month,
+    totals: {
+      totalAmount: money(totals.totalAmount),
+      entryCount: totals.entryCount,
+      averageAmount: totals.entryCount ? money(totals.totalAmount / totals.entryCount) : 0
+    },
+    typeSummary: typeSummary,
+    dailySummary: dailySummary,
+    entries: entries
+  };
 }
 
 function getAnalyticsSummary(currentTotal, previousTotal) {
@@ -2160,7 +2322,7 @@ function createApp(api) {
       }
     }
     api.run(
-      "UPDATE daily_ledgers SET sales_total = ?, actual_received = ?, cash_amount = ?, wechat_amount = ?, alipay_amount = ?, member_card_amount = ?, refund_amount = ?, rounding_amount = ?, note = ?, updated_by = ?, updated_at = ? WHERE id = ?",
+      "UPDATE daily_ledgers SET sales_total = ?, actual_received = ?, cash_amount = ?, wechat_amount = ?, alipay_amount = ?, member_card_amount = ?, refund_amount = ?, rounding_amount = ?, inventory_amount = ?, note = ?, updated_by = ?, updated_at = ? WHERE id = ?",
       [
         salesTotal,
         actualReceived,
@@ -2170,6 +2332,7 @@ function createApp(api) {
         money(body.memberCardAmount),
         refundAmount,
         roundingAmount,
+        money(body.inventoryAmount),
         String(body.note || ""),
         req.user.id,
         now,
@@ -2330,6 +2493,12 @@ function createApp(api) {
     }
     api.run("DELETE FROM expense_entries WHERE id = ?", [intValue(req.params.id, 0)]);
     res.json({ success: true });
+  });
+
+  app.get("/api/expenses-monthly", function getExpensesMonthly(req, res) {
+    const month = String(req.query.month || monthText());
+    const storeName = resolveRequestedStoreName(req, req.query.storeName, true);
+    res.json(getMonthlyExpenseSummary(api, month, storeName));
   });
 
   app.get("/api/purchases/:date", function listPurchases(req, res) {
@@ -2512,9 +2681,13 @@ function createWorkbookForDaily(api, date, storeName) {
       memberCardAmount: "\u4f1a\u5458\u5361\u6536\u5165",
       refundAmount: "\u9000\u6b3e",
       roundingAmount: "\u62b9\u96f6",
+      inventoryAmount: "\u671f\u672b\u5e93\u5b58\u8fdb\u8d27\u91d1\u989d",
       note: "\u5907\u6ce8",
       expenseTotal: "\u652f\u51fa\u5408\u8ba1",
-      purchaseTotal: "\u8fdb\u8d27\u5408\u8ba1"
+      purchaseTotal: "\u8fdb\u8d27\u5408\u8ba1",
+      openingInventoryAmount: "\u671f\u521d\u5e93\u5b58\u8fdb\u8d27\u91d1\u989d",
+      endingInventoryAmount: "\u671f\u672b\u5e93\u5b58\u8fdb\u8d27\u91d1\u989d",
+      costOfGoodsSold: "\u5df2\u9500\u552e\u6210\u672c"
     }),
     "\u65e5\u62a5\u6c47\u603b"
   );
@@ -2606,6 +2779,9 @@ function createWorkbookForMonthly(api, month, storeName) {
       memberCardAmount: "\u6708\u4f1a\u5458\u5361\u6536\u5165",
       expenseTotal: "\u6708\u652f\u51fa\u5408\u8ba1",
       purchaseTotal: "\u6708\u8fdb\u8d27\u5408\u8ba1",
+      openingInventoryAmount: "\u671f\u521d\u5e93\u5b58\u8fdb\u8d27\u91d1\u989d",
+      endingInventoryAmount: "\u671f\u672b\u5e93\u5b58\u8fdb\u8d27\u91d1\u989d",
+      costOfGoodsSold: "\u6708\u5df2\u9500\u552e\u6210\u672c",
       grossProfit: "\u6708\u6bdb\u5229\u6da6",
       actualProfit: "\u6708\u5b9e\u9645\u5229\u6da6"
     }),
@@ -2621,6 +2797,9 @@ function createWorkbookForMonthly(api, month, storeName) {
       memberCardAmount: "\u4f1a\u5458\u5361\u6536\u5165",
       expenseTotal: "\u652f\u51fa\u5408\u8ba1",
       purchaseTotal: "\u8fdb\u8d27\u5408\u8ba1",
+      openingInventoryAmount: "\u671f\u521d\u5e93\u5b58\u8fdb\u8d27\u91d1\u989d",
+      endingInventoryAmount: "\u671f\u672b\u5e93\u5b58\u8fdb\u8d27\u91d1\u989d",
+      costOfGoodsSold: "\u5df2\u9500\u552e\u6210\u672c",
       grossProfit: "\u6bdb\u5229\u6da6",
       actualProfit: "\u5b9e\u9645\u5229\u6da6"
     }),
@@ -2734,7 +2913,10 @@ function createWorkbookForMonthly(api, month, storeName) {
         actualReceived: "\u5b9e\u9645\u6536\u6b3e",
         memberCardAmount: "\u4f1a\u5458\u5361\u6536\u5165",
         purchaseTotal: "\u8fdb\u8d27\u603b\u989d",
+        costOfGoodsSold: "\u5df2\u9500\u552e\u6210\u672c",
         expenseTotal: "\u652f\u51fa\u603b\u989d",
+        openingInventoryAmount: "\u671f\u521d\u5e93\u5b58\u8fdb\u8d27\u91d1\u989d",
+        endingInventoryAmount: "\u671f\u672b\u5e93\u5b58\u8fdb\u8d27\u91d1\u989d",
         grossProfit: "\u6bdb\u5229\u6da6",
         actualProfit: "\u5b9e\u9645\u5229\u6da6"
       }),
