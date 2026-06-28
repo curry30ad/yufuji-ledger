@@ -69,7 +69,8 @@ function normalizeStoreName(value) {
 }
 
 function isPlaceholderStoreName(value) {
-  return /^store\d+$/i.test(String(value || "").trim());
+  const text = String(value || "").trim();
+  return /^store\d+$/i.test(text) || /^\?+$/.test(text);
 }
 
 function monthText() {

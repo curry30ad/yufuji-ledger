@@ -41,6 +41,16 @@ function byId(id) {
   return document.getElementById(id);
 }
 
+function bindById(id, eventName, handler) {
+  var element = byId(id);
+  if (!element) {
+    console.warn("Missing element:", id);
+    return null;
+  }
+  element.addEventListener(eventName, handler);
+  return element;
+}
+
 function ensurePurchaseProductsUi() {
   if (!byId("purchaseProductsSection")) {
     var usersSection = byId("usersSection");
@@ -103,6 +113,14 @@ function yuan(value) {
   return "¥" + Number(value || 0).toFixed(2);
 }
 
+function money(value) {
+  const amount = Number.parseFloat(value);
+  if (!Number.isFinite(amount)) {
+    return 0;
+  }
+  return Math.round(amount * 100) / 100;
+}
+
 function percentText(value) {
   return value === null || value === undefined ? "新增" : Number(value).toFixed(2) + "%";
 }
@@ -111,6 +129,10 @@ function showMessage(message) {
   if (message) {
     window.alert(message);
   }
+}
+
+function normalizeLedgerMoneyInput(value) {
+  return String(value || "").trim() ? String(value).trim() : "0";
 }
 
 function expenseTypeText(type, label) {
@@ -1390,6 +1412,9 @@ function resetProductForm() {
 
 function resetPurchaseProductForm() {
   const form = byId("purchaseProductForm");
+  if (!form) {
+    return;
+  }
   form.reset();
   form.elements.id.value = "";
   form.elements.isActive.checked = true;
@@ -1521,6 +1546,10 @@ function fillPurchaseProductForm(purchaseProductId) {
     return;
   }
   const form = byId("purchaseProductForm");
+  if (!form) {
+    showMessage("进货商品表单未加载，请刷新页面后重试。");
+    return;
+  }
   form.elements.id.value = item.id;
   form.elements.name.value = item.name;
   form.elements.keywords.value = item.keywords || "";
@@ -1754,56 +1783,94 @@ async function submitLedgerForm(event) {
     return;
   }
   const form = event.currentTarget;
+  form.elements.refundAmount.value = normalizeLedgerMoneyInput(form.elements.refundAmount.value);
+  form.elements.roundingAmount.value = normalizeLedgerMoneyInput(form.elements.roundingAmount.value);
+  form.elements.cashAmount.value = normalizeLedgerMoneyInput(form.elements.cashAmount.value);
+  form.elements.wechatAmount.value = normalizeLedgerMoneyInput(form.elements.wechatAmount.value);
+  form.elements.alipayAmount.value = normalizeLedgerMoneyInput(form.elements.alipayAmount.value);
+  form.elements.memberCardAmount.value = normalizeLedgerMoneyInput(form.elements.memberCardAmount.value);
+  form.elements.inventoryAmount.value = normalizeLedgerMoneyInput(form.elements.inventoryAmount.value);
+
+  syncLedgerSalesAndReceived(form);
+  form.elements.salesTotal.value = normalizeLedgerMoneyInput(form.elements.salesTotal.value);
+  form.elements.actualReceived.value = normalizeLedgerMoneyInput(form.elements.actualReceived.value);
   const refundAmount = form.elements.refundAmount.value;
   const roundingAmount = form.elements.roundingAmount.value;
-  let salesTotal = form.elements.salesTotal.value;
-  let actualReceived = form.elements.actualReceived.value;
-  const noRefundOrRounding = money(refundAmount) === 0 && money(roundingAmount) === 0;
-  if (noRefundOrRounding) {
-    if (!String(salesTotal || "").trim() && String(actualReceived || "").trim()) {
-      salesTotal = actualReceived;
-      form.elements.salesTotal.value = actualReceived;
-    } else if (!String(actualReceived || "").trim() && String(salesTotal || "").trim()) {
-      actualReceived = salesTotal;
-      form.elements.actualReceived.value = salesTotal;
-    }
+
+  try {
+    await request("/api/ledger/" + byId("activeDate").value, {
+      method: "PUT",
+      body: JSON.stringify({
+        salesTotal: form.elements.salesTotal.value,
+        actualReceived: form.elements.actualReceived.value,
+        cashAmount: form.elements.cashAmount.value,
+        wechatAmount: form.elements.wechatAmount.value,
+        alipayAmount: form.elements.alipayAmount.value,
+        memberCardAmount: form.elements.memberCardAmount.value,
+        refundAmount: refundAmount,
+        roundingAmount: roundingAmount,
+        inventoryAmount: form.elements.inventoryAmount.value,
+        note: form.elements.note.value,
+        storeName: getSelectedStore()
+      })
+    });
+    await loadDashboardData();
+    showMessage("经营数据已保存。");
+  } catch (error) {
+    showMessage(error.message || "保存失败，请重试。");
   }
-  await request("/api/ledger/" + byId("activeDate").value, {
-    method: "PUT",
-    body: JSON.stringify({
-      salesTotal: salesTotal,
-      actualReceived: actualReceived,
-      cashAmount: form.elements.cashAmount.value,
-      wechatAmount: form.elements.wechatAmount.value,
-      alipayAmount: form.elements.alipayAmount.value,
-      memberCardAmount: form.elements.memberCardAmount.value,
-      refundAmount: refundAmount,
-      roundingAmount: roundingAmount,
-      inventoryAmount: form.elements.inventoryAmount.value,
-      note: form.elements.note.value,
-      storeName: getSelectedStore()
-    })
-  });
-  await loadDashboardData();
 }
 
-function syncLedgerSalesAndReceived() {
-  const form = byId("ledgerForm");
-  if (!form) {
+function syncLedgerSalesAndReceived(form) {
+  const ledgerForm = form || byId("ledgerForm");
+  if (!ledgerForm) {
     return;
   }
-  const refundAmount = form.elements.refundAmount.value;
-  const roundingAmount = form.elements.roundingAmount.value;
+  ledgerForm.elements.salesTotal.value = String(ledgerForm.elements.salesTotal.value || "").trim();
+  ledgerForm.elements.actualReceived.value = String(ledgerForm.elements.actualReceived.value || "").trim();
+  const refundAmount = ledgerForm.elements.refundAmount.value;
+  const roundingAmount = ledgerForm.elements.roundingAmount.value;
   if (money(refundAmount) !== 0 || money(roundingAmount) !== 0) {
     return;
   }
-  const salesTotal = String(form.elements.salesTotal.value || "").trim();
-  const actualReceived = String(form.elements.actualReceived.value || "").trim();
-  if (!salesTotal && actualReceived) {
-    form.elements.salesTotal.value = actualReceived;
-  } else if (!actualReceived && salesTotal) {
-    form.elements.actualReceived.value = salesTotal;
+  const salesTotal = String(ledgerForm.elements.salesTotal.value || "").trim();
+  const actualReceived = String(ledgerForm.elements.actualReceived.value || "").trim();
+  const salesBlank = !salesTotal || money(salesTotal) === 0;
+  const actualBlank = !actualReceived || money(actualReceived) === 0;
+  if (salesBlank && !actualBlank) {
+    ledgerForm.elements.salesTotal.value = actualReceived;
+  } else if (actualBlank && !salesBlank) {
+    ledgerForm.elements.actualReceived.value = salesTotal;
   }
+}
+
+function mirrorLedgerSalesAndReceived(event) {
+  const form = event && event.currentTarget && event.currentTarget.form ? event.currentTarget.form : byId("ledgerForm");
+  if (!form) {
+    return;
+  }
+  if (money(form.elements.refundAmount.value) !== 0 || money(form.elements.roundingAmount.value) !== 0) {
+    return;
+  }
+  const fieldName = event && event.currentTarget ? event.currentTarget.name : "";
+  if (fieldName === "salesTotal") {
+    form.elements.actualReceived.value = String(form.elements.salesTotal.value || "").trim();
+  } else if (fieldName === "actualReceived") {
+    form.elements.salesTotal.value = String(form.elements.actualReceived.value || "").trim();
+  }
+}
+
+function syncLedgerSalesAndReceivedOnInput(event) {
+  const form = event && event.currentTarget && event.currentTarget.form ? event.currentTarget.form : byId("ledgerForm");
+  if (!form) {
+    return;
+  }
+  const fieldName = event && event.currentTarget ? event.currentTarget.name : "";
+  if (fieldName === "salesTotal" || fieldName === "actualReceived") {
+    mirrorLedgerSalesAndReceived(event);
+    return;
+  }
+  syncLedgerSalesAndReceived(form);
 }
 
 async function submitSaleForm(event) {
@@ -2223,9 +2290,9 @@ function handleBodyChange(event) {
 
 async function bootstrap() {
   ensurePurchaseProductsUi();
-  byId("loginForm").addEventListener("submit", handleLogin);
-  byId("logoutBtn").addEventListener("click", logout);
-  byId("refreshBtn").addEventListener("click", async function () {
+  bindById("loginForm", "submit", handleLogin);
+  bindById("logoutBtn", "click", logout);
+  bindById("refreshBtn", "click", async function () {
     if (isOwner()) {
       await loadUsersIfNeeded();
     }
@@ -2240,40 +2307,46 @@ async function bootstrap() {
     });
   });
 
-  byId("ledgerForm").addEventListener("submit", submitLedgerForm);
-  byId("ledgerForm").elements.salesTotal.addEventListener("blur", syncLedgerSalesAndReceived);
-  byId("ledgerForm").elements.actualReceived.addEventListener("blur", syncLedgerSalesAndReceived);
-  byId("ledgerForm").elements.refundAmount.addEventListener("blur", syncLedgerSalesAndReceived);
-  byId("ledgerForm").elements.roundingAmount.addEventListener("blur", syncLedgerSalesAndReceived);
-  byId("saleForm").addEventListener("submit", submitSaleForm);
-  byId("purchaseForm").addEventListener("submit", submitPurchaseForm);
-  byId("addPurchaseDraftBtn").addEventListener("click", addPurchaseDraftItem);
-  byId("purchaseProductNameInput").addEventListener("input", handlePurchaseProductInput);
-  byId("purchaseProductNameInput").addEventListener("focus", handlePurchaseProductFocus);
-  byId("purchaseProductNameInput").addEventListener("keydown", handlePurchaseProductKeydown);
-  byId("receiptForm").addEventListener("submit", submitReceiptScan);
-  byId("expenseForm").addEventListener("submit", submitExpenseForm);
-  byId("productForm").addEventListener("submit", submitProductForm);
-  byId("purchaseProductForm").addEventListener("submit", submitPurchaseProductForm);
-  byId("userForm").addEventListener("submit", submitUserForm);
-  byId("overviewRangeForm").addEventListener("submit", submitOverviewRangeForm);
+  var ledgerForm = bindById("ledgerForm", "submit", submitLedgerForm);
+  if (ledgerForm) {
+    ledgerForm.elements.salesTotal.addEventListener("input", syncLedgerSalesAndReceivedOnInput);
+    ledgerForm.elements.actualReceived.addEventListener("input", syncLedgerSalesAndReceivedOnInput);
+    ledgerForm.elements.refundAmount.addEventListener("input", syncLedgerSalesAndReceivedOnInput);
+    ledgerForm.elements.roundingAmount.addEventListener("input", syncLedgerSalesAndReceivedOnInput);
+    ledgerForm.elements.salesTotal.addEventListener("blur", mirrorLedgerSalesAndReceived);
+    ledgerForm.elements.actualReceived.addEventListener("blur", mirrorLedgerSalesAndReceived);
+    ledgerForm.elements.refundAmount.addEventListener("blur", syncLedgerSalesAndReceived);
+    ledgerForm.elements.roundingAmount.addEventListener("blur", syncLedgerSalesAndReceived);
+  }
+  bindById("saleForm", "submit", submitSaleForm);
+  bindById("purchaseForm", "submit", submitPurchaseForm);
+  bindById("addPurchaseDraftBtn", "click", addPurchaseDraftItem);
+  bindById("purchaseProductNameInput", "input", handlePurchaseProductInput);
+  bindById("purchaseProductNameInput", "focus", handlePurchaseProductFocus);
+  bindById("purchaseProductNameInput", "keydown", handlePurchaseProductKeydown);
+  bindById("receiptForm", "submit", submitReceiptScan);
+  bindById("expenseForm", "submit", submitExpenseForm);
+  bindById("productForm", "submit", submitProductForm);
+  bindById("purchaseProductForm", "submit", submitPurchaseProductForm);
+  bindById("userForm", "submit", submitUserForm);
+  bindById("overviewRangeForm", "submit", submitOverviewRangeForm);
 
-  byId("resetProductBtn").addEventListener("click", resetProductForm);
-  byId("resetPurchaseProductBtn").addEventListener("click", resetPurchaseProductForm);
-  byId("resetSaleBtn").addEventListener("click", resetSaleForm);
-  byId("resetPurchaseBtn").addEventListener("click", resetPurchaseForm);
-  byId("resetExpenseBtn").addEventListener("click", resetExpenseForm);
-  byId("resetUserBtn").addEventListener("click", resetUserForm);
+  bindById("resetProductBtn", "click", resetProductForm);
+  bindById("resetPurchaseProductBtn", "click", resetPurchaseProductForm);
+  bindById("resetSaleBtn", "click", resetSaleForm);
+  bindById("resetPurchaseBtn", "click", resetPurchaseForm);
+  bindById("resetExpenseBtn", "click", resetExpenseForm);
+  bindById("resetUserBtn", "click", resetUserForm);
   resetPurchaseForm();
   resetPurchaseProductForm();
   resetExpenseForm();
 
-  byId("activeDate").addEventListener("change", function () {
+  bindById("activeDate", "change", function () {
     state.receiptScan = null;
     renderReceiptRecognition();
     loadDashboardData();
   });
-  byId("activeMonth").addEventListener("change", function () {
+  bindById("activeMonth", "change", function () {
     if (isOwner()) {
       byId("overviewRangeStart").value = byId("activeMonth").value + "-01";
       loadDashboardData();
@@ -2289,10 +2362,10 @@ async function bootstrap() {
     });
   }
 
-  byId("exportDailyBtn").addEventListener("click", function () {
+  bindById("exportDailyBtn", "click", function () {
     downloadFile(appendStoreQuery("/api/export/daily?date=" + byId("activeDate").value), "日报-" + byId("activeDate").value + ".xlsx");
   });
-  byId("exportMonthlyBtn").addEventListener("click", function () {
+  bindById("exportMonthlyBtn", "click", function () {
     downloadFile(appendStoreQuery("/api/export/monthly?month=" + byId("activeMonth").value), "月报-" + byId("activeMonth").value + ".xlsx");
   });
 
@@ -2314,4 +2387,7 @@ async function bootstrap() {
   }
 }
 
-bootstrap();
+bootstrap().catch(function (error) {
+  console.error(error);
+  showMessage(error && error.message ? error.message : "页面初始化失败，请刷新页面后重试。");
+});
