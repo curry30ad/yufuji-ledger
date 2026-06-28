@@ -9,6 +9,7 @@ server.log
 server-error.log
 *.log
 *.zip
+*.bundle
 *.traineddata
 *.traineddata.gz
 
