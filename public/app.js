@@ -847,6 +847,7 @@ function renderExpenses() {
   const rows = state.ledgerBundle.expenses.map(function (item) {
     return [
       expenseTypeText(item.expenseType, item.expenseLabel),
+      item.excludeFromAccounting ? "个人记录" : "计入账目",
       yuan(item.amount),
       item.note || "-",
       '<button class="ghost small-btn" data-expense-edit="' + item.id + '">编辑</button> ' +
@@ -854,7 +855,7 @@ function renderExpenses() {
     ];
   });
   byId("expensesTable").innerHTML = rows.length
-    ? tableHtml(["类型", "金额", "备注", "操作"], rows)
+    ? tableHtml(["类型", "口径", "金额", "备注", "操作"], rows)
     : '<div class="empty">当天还没有支出记录。</div>';
 }
 
@@ -870,7 +871,9 @@ function renderMonthlyExpenseSummary() {
   }
 
   const overviewHtml = '<div class="report-list">' + [
-    ["本月支出合计", yuan((monthly.totals && monthly.totals.totalAmount) || 0)],
+    ["本月账目内支出", yuan((monthly.totals && monthly.totals.accountingAmount) || 0)],
+    ["本月个人记录支出", yuan((monthly.totals && monthly.totals.personalAmount) || 0)],
+    ["本月全部支出", yuan((monthly.totals && monthly.totals.totalAmount) || 0)],
     ["本月支出笔数", String((monthly.totals && monthly.totals.entryCount) || 0)],
     ["单笔平均支出", yuan((monthly.totals && monthly.totals.averageAmount) || 0)]
   ].map(function (item) {
@@ -879,27 +882,27 @@ function renderMonthlyExpenseSummary() {
 
   const typeHtml = monthly.typeSummary && monthly.typeSummary.length
     ? reportSectionHtml("按类型汇总", tableHtml(
-        ["支出类型", "本月金额", "本月笔数"],
+        ["支出类型", "账目内", "个人记录", "全部金额", "本月笔数"],
         monthly.typeSummary.map(function (item) {
-          return [expenseTypeText(item.expenseType, item.expenseLabel), yuan(item.amount), String(item.entryCount)];
+          return [expenseTypeText(item.expenseType, item.expenseLabel), yuan(item.accountingAmount || 0), yuan(item.personalAmount || 0), yuan(item.amount), String(item.entryCount)];
         })
       ))
     : reportSectionHtml("按类型汇总", '<div class="empty">本月还没有支出分类汇总。</div>');
 
   const dailyHtml = monthly.dailySummary && monthly.dailySummary.length
     ? reportSectionHtml("按日期汇总", tableHtml(
-        ["日期", "当日支出", "当日笔数"],
+        ["日期", "账目内", "个人记录", "当日支出", "当日笔数"],
         monthly.dailySummary.map(function (item) {
-          return [item.date, yuan(item.amount), String(item.entryCount)];
+          return [item.date, yuan(item.accountingAmount || 0), yuan(item.personalAmount || 0), yuan(item.amount), String(item.entryCount)];
         })
       ))
     : reportSectionHtml("按日期汇总", '<div class="empty">本月还没有每日支出统计。</div>');
 
   const detailHtml = monthly.entries && monthly.entries.length
     ? reportSectionHtml("支出明细", tableHtml(
-        ["日期", "类型", "金额", "备注"],
+        ["日期", "类型", "口径", "金额", "备注"],
         monthly.entries.map(function (item) {
-          return [item.date, expenseTypeText(item.expenseType, item.expenseLabel), yuan(item.amount), item.note || "-"];
+          return [item.date, expenseTypeText(item.expenseType, item.expenseLabel), item.excludeFromAccounting ? "个人记录" : "计入账目", yuan(item.amount), item.note || "-"];
         })
       ))
     : reportSectionHtml("支出明细", '<div class="empty">本月还没有支出明细。</div>');
@@ -1475,6 +1478,7 @@ function resetExpenseForm() {
   form.reset();
   form.elements.id.value = "";
   form.elements.expenseType.value = "other_daily";
+  form.elements.excludeFromAccounting.checked = false;
 }
 
 function resetUserForm() {
@@ -1578,6 +1582,7 @@ function fillExpenseForm(expenseId) {
   form.elements.id.value = item.id;
   form.elements.expenseType.value = item.expenseType;
   form.elements.amount.value = item.amount;
+  form.elements.excludeFromAccounting.checked = !!item.excludeFromAccounting;
   form.elements.note.value = item.note || "";
   setSection("expensesSection");
 }
@@ -1874,6 +1879,7 @@ async function submitExpenseForm(event) {
       date: byId("activeDate").value,
       expenseType: form.elements.expenseType.value,
       amount: form.elements.amount.value,
+      excludeFromAccounting: !!form.elements.excludeFromAccounting.checked,
       note: form.elements.note.value,
       storeName: getSelectedStore()
     })

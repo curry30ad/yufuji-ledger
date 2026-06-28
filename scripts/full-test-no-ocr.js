@@ -138,6 +138,14 @@ async function main() {
     }, ownerToken);
     await request(context.port, "POST", "/api/expenses", {
       date: date,
+      expenseType: "other_daily",
+      amount: 12,
+      excludeFromAccounting: true,
+      note: "门店1个人记录",
+      storeName: "门店1"
+    }, ownerToken);
+    await request(context.port, "POST", "/api/expenses", {
+      date: date,
       expenseType: "delivery",
       amount: 40,
       note: "门店2配送费",
@@ -183,6 +191,8 @@ async function main() {
     const monthlyStore1 = await request(context.port, "GET", "/api/reports/monthly?month=" + month + "&storeName=" + encodeURIComponent("门店1"), null, ownerToken);
     const rangeStore1 = await request(context.port, "GET", "/api/overview-range?fromDate=" + date + "&toDate=" + date + "&storeName=" + encodeURIComponent("门店1"), null, ownerToken);
     assert(ledgerStore1.ledger.purchaseTotal === 110, "daily purchase total should include all purchase lines");
+    assert(ledgerStore1.ledger.expenseTotal === 20, "daily expense total should exclude personal-record expenses");
+    assert(ledgerStore1.expenses.length === 2, "daily expense list should still include accounting and personal-record expenses");
     assert(ledgerStore1.ledger.endingInventoryAmount === 40, "daily ending inventory amount should be returned");
     assert(ledgerStore1.ledger.costOfGoodsSold === 70, "daily cost of goods sold should subtract ending inventory");
     assert(ledgerStore1.ledger.grossProfit === 230, "daily gross profit should use adjusted sold cost");
@@ -193,9 +203,11 @@ async function main() {
     assert(monthlyStore1.totals.grossProfit === 270, "monthly gross profit should use inventory-adjusted sold cost");
     assert(monthlyStore1.totals.actualProfit === 250, "monthly actual profit should use inventory-adjusted sold cost");
     const monthlyExpenseSummary = await request(context.port, "GET", "/api/expenses-monthly?month=" + month + "&storeName=all", null, ownerToken);
-    assert(monthlyExpenseSummary.totals.totalAmount === 60, "monthly expense summary should return all-store monthly expense total");
-    assert(monthlyExpenseSummary.totals.entryCount === 2, "monthly expense summary should count all-store expense entries");
-    assert(monthlyExpenseSummary.typeSummary.length === 2, "monthly expense summary should group expenses by type");
+    assert(monthlyExpenseSummary.totals.totalAmount === 72, "monthly expense summary should include accounting and personal-record totals");
+    assert(monthlyExpenseSummary.totals.accountingAmount === 60, "monthly expense summary should keep accounting totals separate");
+    assert(monthlyExpenseSummary.totals.personalAmount === 12, "monthly expense summary should expose personal-record totals");
+    assert(monthlyExpenseSummary.totals.entryCount === 3, "monthly expense summary should count all expense entries");
+    assert(monthlyExpenseSummary.typeSummary.length === 3, "monthly expense summary should group expenses by type");
     assert(rangeStore1.totals.costOfGoodsSold === 70, "range cost of goods sold should use ending inventory");
     assert(rangeStore1.totals.grossProfit === 230, "range gross profit should use inventory-adjusted sold cost");
     assert(rangeStore1.totals.actualProfit === 210, "range actual profit should use inventory-adjusted sold cost");
@@ -222,7 +234,8 @@ async function main() {
     assert(staffLedger.ledger.salesTotal === 300, "staff should only see own store ledger");
     assert(staffLedger.ledger.grossProfit === null, "staff should not see gross profit fields");
     assert(staffLedger.ledger.actualProfit === null, "staff should not see actual profit fields");
-    assert(staffMonthlyExpense.totals.totalAmount === 20, "staff monthly expense summary should be scoped to own store");
+    assert(staffMonthlyExpense.totals.totalAmount === 32, "staff monthly expense summary should include own-store personal records");
+    assert(staffMonthlyExpense.totals.accountingAmount === 20, "staff monthly expense summary should keep own-store accounting totals separate");
 
     const store2Ledger = await request(context.port, "GET", "/api/ledger/" + date + "?storeName=" + encodeURIComponent("门店2"), null, ownerToken);
     const store2Sale = store2Ledger.sales[0];
@@ -254,11 +267,15 @@ async function main() {
       amount: 100,
       note: "店员修改本店销售"
     }, staffToken);
-    await request(context.port, "DELETE", "/api/expenses/" + ledgerStore1.expenses[0].id, null, staffToken);
+    const accountingExpense = ledgerStore1.expenses.find(function findExpense(item) {
+      return !item.excludeFromAccounting;
+    });
+    await request(context.port, "DELETE", "/api/expenses/" + accountingExpense.id, null, staffToken);
 
     const store1AfterStaffEdit = await request(context.port, "GET", "/api/ledger/" + date + "?storeName=" + encodeURIComponent("门店1"), null, ownerToken);
     assert(store1AfterStaffEdit.sales[0].amount === 100, "staff should be able to edit own store sale");
-    assert(store1AfterStaffEdit.expenses.length === 0, "staff should be able to delete own store expense");
+    assert(store1AfterStaffEdit.expenses.length === 1, "deleting accounting expense should keep personal-record expense");
+    assert(store1AfterStaffEdit.ledger.expenseTotal === 0, "personal-record expense should still not count into expense totals");
 
     const exportDaily = await request(context.port, "GET", "/api/export/daily?date=" + date + "&storeName=" + encodeURIComponent("门店1"), null, ownerToken);
     const exportMonthly = await request(context.port, "GET", "/api/export/monthly?month=" + month + "&storeName=" + encodeURIComponent("门店1"), null, ownerToken);

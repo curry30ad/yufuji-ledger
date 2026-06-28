@@ -226,6 +226,10 @@ function expenseTypeLabel(value) {
   return EXPENSE_TYPE_LABELS[normalizeExpenseType(value)] || EXPENSE_TYPE_LABELS.other_daily;
 }
 
+function isExcludedFromAccounting(value) {
+  return intValue(value, 0) === 1;
+}
+
 function buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal) {
   const grossProfit = money(money(salesTotal) - money(purchaseTotal));
   const actualProfit = money(grossProfit - money(expenseTotal));
@@ -419,6 +423,7 @@ function createSchema(api) {
       store_name TEXT NOT NULL DEFAULT '${DEFAULT_STORE_NAME}',
       expense_type TEXT NOT NULL,
       amount REAL NOT NULL DEFAULT 0,
+      exclude_from_accounting INTEGER NOT NULL DEFAULT 0,
       note TEXT NOT NULL DEFAULT '',
       created_by INTEGER,
       created_at TEXT NOT NULL,
@@ -696,6 +701,7 @@ function migrateSchema(api) {
   ensureColumn(api, "purchase_products", "sort_order INTEGER NOT NULL DEFAULT 0");
   ensureColumn(api, "sale_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "expense_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
+  ensureColumn(api, "expense_entries", "exclude_from_accounting INTEGER NOT NULL DEFAULT 0");
   ensureColumn(api, "purchase_entries", "store_name TEXT NOT NULL DEFAULT '" + DEFAULT_STORE_NAME + "'");
   ensureColumn(api, "purchase_entries", "purchase_order_no TEXT NOT NULL DEFAULT ''");
   ensureColumn(api, "purchase_entries", "supplier TEXT NOT NULL DEFAULT ''");
@@ -894,7 +900,7 @@ function ensureLedger(api, date, userId, storeName) {
 function getExpensesTotal(api, date, storeName) {
   const filter = buildStoreFilter("store_name", storeName);
   const row = api.one(
-    "SELECT COALESCE(SUM(amount), 0) AS total FROM expense_entries WHERE expense_date = ?" + filter.clause,
+    "SELECT COALESCE(SUM(amount), 0) AS total FROM expense_entries WHERE expense_date = ? AND COALESCE(exclude_from_accounting, 0) = 0" + filter.clause,
     [date].concat(filter.params)
   );
   return money(row ? row.total : 0);
@@ -1369,7 +1375,7 @@ function getMonthlyStoreSalesSummary(api, month) {
     [fromDate, toDate]
   );
   const expenseRows = api.all(
-    "SELECT store_name, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ? GROUP BY store_name ORDER BY store_name ASC",
+    "SELECT store_name, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ? AND COALESCE(exclude_from_accounting, 0) = 0 GROUP BY store_name ORDER BY store_name ASC",
     [fromDate, toDate]
   );
   const purchaseMap = {};
@@ -1547,6 +1553,7 @@ function getLedgerBundle(api, date, storeName) {
       expenseType: normalizeExpenseType(row.expense_type),
       expenseLabel: expenseTypeLabel(row.expense_type),
       amount: money(row.amount),
+      excludeFromAccounting: isExcludedFromAccounting(row.exclude_from_accounting),
       note: row.note,
       createdBy: row.created_by,
       createdAt: row.created_at,
@@ -1556,7 +1563,7 @@ function getLedgerBundle(api, date, storeName) {
   const purchases = getPurchaseEntries(api, date, normalizedStoreName);
 
   const expenseTotal = expenses.reduce(function sum(total, item) {
-    return total + item.amount;
+    return item.excludeFromAccounting ? total : total + item.amount;
   }, 0);
   const purchaseTotal = purchases.reduce(function sum(total, item) {
     return total + item.totalCost;
@@ -1609,7 +1616,7 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
   );
   const expenseFilter = buildStoreFilter("store_name", normalizedStoreName);
   const expenseRows = api.all(
-    "SELECT expense_date, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ?" + expenseFilter.clause + " GROUP BY expense_date",
+    "SELECT expense_date, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ? AND COALESCE(exclude_from_accounting, 0) = 0" + expenseFilter.clause + " GROUP BY expense_date",
     [fromDate, toDate].concat(expenseFilter.params)
   );
   const purchaseFilter = buildStoreFilter("store_name", normalizedStoreName);
@@ -1716,7 +1723,7 @@ function getMonthlySummary(api, month, storeName) {
   );
   const expenseFilter = buildStoreFilter("store_name", normalizedStoreName);
   const expenseRows = api.all(
-    "SELECT expense_date, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ?" + expenseFilter.clause + " GROUP BY expense_date",
+    "SELECT expense_date, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ? AND COALESCE(exclude_from_accounting, 0) = 0" + expenseFilter.clause + " GROUP BY expense_date",
     [fromDate, toDate].concat(expenseFilter.params)
   );
   const purchaseFilter = buildStoreFilter("store_name", normalizedStoreName);
@@ -1851,6 +1858,7 @@ function getMonthlyExpenseEntries(api, month, storeName) {
       expenseType: normalizeExpenseType(row.expense_type),
       expenseLabel: expenseTypeLabel(row.expense_type),
       amount: money(row.amount),
+      excludeFromAccounting: isExcludedFromAccounting(row.exclude_from_accounting),
       note: row.note,
       createdBy: row.created_by,
       createdAt: row.created_at,
@@ -1864,8 +1872,15 @@ function getMonthlyExpenseSummary(api, month, storeName) {
   const totals = entries.reduce(function reduceTotals(acc, item) {
     acc.totalAmount += money(item.amount);
     acc.entryCount += 1;
+    if (item.excludeFromAccounting) {
+      acc.personalAmount += money(item.amount);
+      acc.personalEntryCount += 1;
+    } else {
+      acc.accountingAmount += money(item.amount);
+      acc.accountingEntryCount += 1;
+    }
     return acc;
-  }, { totalAmount: 0, entryCount: 0 });
+  }, { totalAmount: 0, entryCount: 0, accountingAmount: 0, accountingEntryCount: 0, personalAmount: 0, personalEntryCount: 0 });
 
   const typeMap = {};
   const dailyMap = {};
@@ -1876,20 +1891,34 @@ function getMonthlyExpenseSummary(api, month, storeName) {
         expenseType: typeKey,
         expenseLabel: item.expenseLabel || expenseTypeLabel(typeKey),
         amount: 0,
+        accountingAmount: 0,
+        personalAmount: 0,
         entryCount: 0
       };
     }
     typeMap[typeKey].amount = money((typeMap[typeKey].amount || 0) + money(item.amount));
+    if (item.excludeFromAccounting) {
+      typeMap[typeKey].personalAmount = money((typeMap[typeKey].personalAmount || 0) + money(item.amount));
+    } else {
+      typeMap[typeKey].accountingAmount = money((typeMap[typeKey].accountingAmount || 0) + money(item.amount));
+    }
     typeMap[typeKey].entryCount = (typeMap[typeKey].entryCount || 0) + 1;
 
     if (!dailyMap[item.date]) {
       dailyMap[item.date] = {
         date: item.date,
         amount: 0,
+        accountingAmount: 0,
+        personalAmount: 0,
         entryCount: 0
       };
     }
     dailyMap[item.date].amount = money(dailyMap[item.date].amount + money(item.amount));
+    if (item.excludeFromAccounting) {
+      dailyMap[item.date].personalAmount = money(dailyMap[item.date].personalAmount + money(item.amount));
+    } else {
+      dailyMap[item.date].accountingAmount = money(dailyMap[item.date].accountingAmount + money(item.amount));
+    }
     dailyMap[item.date].entryCount += 1;
   });
 
@@ -1899,6 +1928,8 @@ function getMonthlyExpenseSummary(api, month, storeName) {
       expenseType: item.expenseType,
       expenseLabel: item.expenseLabel,
       amount: money(item.amount),
+      accountingAmount: money(item.accountingAmount || 0),
+      personalAmount: money(item.personalAmount || 0),
       entryCount: item.entryCount
     };
   }).sort(function sortType(a, b) {
@@ -1909,6 +1940,8 @@ function getMonthlyExpenseSummary(api, month, storeName) {
     return {
       date: key,
       amount: money(dailyMap[key].amount),
+      accountingAmount: money(dailyMap[key].accountingAmount || 0),
+      personalAmount: money(dailyMap[key].personalAmount || 0),
       entryCount: dailyMap[key].entryCount
     };
   });
@@ -1918,6 +1951,10 @@ function getMonthlyExpenseSummary(api, month, storeName) {
     totals: {
       totalAmount: money(totals.totalAmount),
       entryCount: totals.entryCount,
+      accountingAmount: money(totals.accountingAmount),
+      accountingEntryCount: totals.accountingEntryCount,
+      personalAmount: money(totals.personalAmount),
+      personalEntryCount: totals.personalEntryCount,
       averageAmount: totals.entryCount ? money(totals.totalAmount / totals.entryCount) : 0
     },
     typeSummary: typeSummary,
@@ -2453,6 +2490,7 @@ function createApp(api) {
         expenseType: normalizeExpenseType(row.expense_type),
         expenseLabel: expenseTypeLabel(row.expense_type),
         amount: money(row.amount),
+        excludeFromAccounting: isExcludedFromAccounting(row.exclude_from_accounting),
         note: row.note,
         createdBy: row.created_by,
         createdAt: row.created_at,
@@ -2466,8 +2504,8 @@ function createApp(api) {
     const now = new Date().toISOString();
     const storeName = resolveRequestedStoreName(req, body.storeName, false);
     api.run(
-      "INSERT INTO expense_entries (expense_date, store_name, expense_type, amount, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      [body.date, storeName, normalizeExpenseType(body.expenseType), money(body.amount), String(body.note || ""), req.user.id, now, now]
+      "INSERT INTO expense_entries (expense_date, store_name, expense_type, amount, exclude_from_accounting, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [body.date, storeName, normalizeExpenseType(body.expenseType), money(body.amount), body.excludeFromAccounting ? 1 : 0, String(body.note || ""), req.user.id, now, now]
     );
     res.json({ success: true });
   });
@@ -2480,8 +2518,8 @@ function createApp(api) {
     }
     const now = new Date().toISOString();
     api.run(
-      "UPDATE expense_entries SET expense_type = ?, amount = ?, note = ?, updated_at = ? WHERE id = ?",
-      [normalizeExpenseType(body.expenseType), money(body.amount), String(body.note || ""), now, intValue(req.params.id, 0)]
+      "UPDATE expense_entries SET expense_type = ?, amount = ?, exclude_from_accounting = ?, note = ?, updated_at = ? WHERE id = ?",
+      [normalizeExpenseType(body.expenseType), money(body.amount), body.excludeFromAccounting ? 1 : 0, String(body.note || ""), now, intValue(req.params.id, 0)]
     );
     res.json({ success: true });
   });
