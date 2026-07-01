@@ -109,6 +109,21 @@ function currentMonth() {
   return currentDate().slice(0, 7);
 }
 
+function isMonthEndDate(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) {
+    return false;
+  }
+  const current = new Date(date + "T00:00:00Z");
+  const next = new Date(current.getTime() + 24 * 60 * 60 * 1000);
+  return next.toISOString().slice(0, 7) !== String(date).slice(0, 7);
+}
+
+function inventoryAmountHintText(date) {
+  return isMonthEndDate(date)
+    ? "今天是月底盘库日，请填写本月底还压在店里的进货成本。"
+    : "这个数改为只在月底盘库日填写，平时会沿用上一次月底库存。";
+}
+
 function yuan(value) {
   return "¥" + Number(value || 0).toFixed(2);
 }
@@ -537,6 +552,24 @@ function toNumber(value) {
   return Number(value || 0);
 }
 
+function hasValue(value) {
+  return value !== null && value !== undefined;
+}
+
+function profitDisplayValue(primaryValue, fallbackValue) {
+  if (hasValue(primaryValue)) {
+    return yuan(primaryValue);
+  }
+  if (hasValue(fallbackValue)) {
+    return "参考 " + yuan(fallbackValue);
+  }
+  return "待盘库";
+}
+
+function effectiveProfitNumber(primaryValue, fallbackValue) {
+  return hasValue(primaryValue) ? toNumber(primaryValue) : toNumber(fallbackValue);
+}
+
 function ratioPercent(part, total) {
   if (!total) {
     return 0;
@@ -675,17 +708,17 @@ function renderOverview() {
   }, 0);
   const monthMetrics = overviewMetrics.month && overviewMetrics.month.totals
     ? overviewMetrics.month
-    : { key: activeMonth, salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 } };
+    : { key: activeMonth, salesDays: 0, profitFinalized: true, totals: { averageSales: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0, referenceGrossProfit: 0, referenceActualProfit: 0 } };
   const yearMetrics = overviewMetrics.year && overviewMetrics.year.totals
     ? overviewMetrics.year
-    : { key: String(activeMonth || "").slice(0, 4), salesDays: 0, totals: { averageSales: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 } };
+    : { key: String(activeMonth || "").slice(0, 4), salesDays: 0, finalizedMonths: [], pendingMonths: [], totals: { averageSales: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 } };
   const salesTotal = toNumber(ledger.salesTotal);
   const grossProfit = toNumber(ledger.grossProfit);
   const actualProfit = toNumber(ledger.actualProfit);
   const expenseTotal = toNumber(ledger.expenseTotal);
   const monthSalesTotal = toNumber(monthMetrics.totals.salesTotal);
-  const monthGrossProfit = toNumber(monthMetrics.totals.grossProfit);
-  const monthActualProfit = toNumber(monthMetrics.totals.actualProfit);
+  const monthGrossProfit = effectiveProfitNumber(monthMetrics.totals.finalGrossProfit, monthMetrics.totals.referenceGrossProfit);
+  const monthActualProfit = effectiveProfitNumber(monthMetrics.totals.finalActualProfit, monthMetrics.totals.referenceActualProfit);
   const monthExpenseTotal = toNumber(monthMetrics.totals.expenseTotal);
   const yearSalesTotal = toNumber(yearMetrics.totals.salesTotal);
   const yearGrossProfit = toNumber(yearMetrics.totals.grossProfit);
@@ -699,20 +732,22 @@ function renderOverview() {
 
   byId("overviewProfitFocus").innerHTML = [
     '<div class="profit-focus-main">',
-    '  <div class="profit-main-kicker">本月实际利润</div>',
-    '  <div class="profit-main-value">' + yuan(monthActualProfit) + '</div>',
-    '  <div class="profit-main-sub">本月毛利 ' + yuan(monthGrossProfit) + '，再减去本月支出 ' + yuan(monthExpenseTotal) + '</div>',
+    '  <div class="profit-main-kicker">' + (monthMetrics.profitFinalized ? '本月实际利润' : '本月参考利润') + '</div>',
+    '  <div class="profit-main-value">' + profitDisplayValue(monthMetrics.totals.finalActualProfit, monthMetrics.totals.referenceActualProfit) + '</div>',
+    '  <div class="profit-main-sub">' + (monthMetrics.profitFinalized
+      ? ('本月毛利 ' + yuan(monthGrossProfit) + '，再减去本月支出 ' + yuan(monthExpenseTotal))
+      : ('月底库存还未提交，当前先按销售 - 进货 - 支出显示参考利润。月底盘库日：' + (monthMetrics.monthEndDate || monthMetrics.key))) + '</div>',
     '</div>',
     '<div class="profit-focus-grid-inner">',
     '  <article class="profit-stat-card">',
     '    <span>本月毛利</span>',
-    '    <strong>' + yuan(monthGrossProfit) + '</strong>',
-    '    <small>毛利率 ' + grossMargin + '</small>',
+    '    <strong>' + profitDisplayValue(monthMetrics.totals.finalGrossProfit, monthMetrics.totals.referenceGrossProfit) + '</strong>',
+    '    <small>' + (monthMetrics.profitFinalized ? ('毛利率 ' + grossMargin) : '参考值，待月底盘库后定稿') + '</small>',
     '  </article>',
     '  <article class="profit-stat-card">',
-    '    <span>本月实际利润</span>',
-    '    <strong>' + yuan(monthActualProfit) + '</strong>',
-    '    <small>实际利润率 ' + actualMargin + '</small>',
+    '    <span>' + (monthMetrics.profitFinalized ? '本月实际利润' : '本月参考利润') + '</span>',
+    '    <strong>' + profitDisplayValue(monthMetrics.totals.finalActualProfit, monthMetrics.totals.referenceActualProfit) + '</strong>',
+    '    <small>' + (monthMetrics.profitFinalized ? ('实际利润率 ' + actualMargin) : '月底提交库存后自动定稿') + '</small>',
     '  </article>',
     '  <article class="profit-stat-card">',
     '    <span>本月销售总额</span>',
@@ -727,12 +762,14 @@ function renderOverview() {
     '  <article class="profit-stat-card">',
     '    <span>本年毛利</span>',
     '    <strong>' + yuan(yearGrossProfit) + '</strong>',
-    '    <small>毛利率 ' + yearGrossMargin + '</small>',
+    '    <small>只汇总已定稿月份' + (yearMetrics.finalizedMonths && yearMetrics.finalizedMonths.length ? '（' + yearMetrics.finalizedMonths.length + '个月）' : '') + '</small>',
     '  </article>',
     '  <article class="profit-stat-card">',
     '    <span>本年实际利润</span>',
     '    <strong>' + yuan(yearActualProfit) + '</strong>',
-    '    <small>实际利润率 ' + yearActualMargin + '</small>',
+    '    <small>' + ((yearMetrics.pendingMonths && yearMetrics.pendingMonths.length)
+      ? ('还有 ' + yearMetrics.pendingMonths.length + ' 个月待月底盘库')
+      : ('实际利润率 ' + yearActualMargin)) + '</small>',
     '  </article>',
     '</div>'
   ].join("");
@@ -765,17 +802,17 @@ function renderOverview() {
     { label: "\u672c\u6708\u5e73\u5747\u9500\u552e\u989d", value: yuan(monthMetrics.totals.averageSales), sub: "\u6309" + monthMetrics.key + "\u7edf\u8ba1" },
     { label: "\u672c\u6708\u4f1a\u5458\u5361\u6536\u5165", value: yuan(monthMetrics.totals.memberCardAmount), sub: "\u6309" + monthMetrics.key + "\u4f1a\u5458\u5361\u53e3\u5f84\u6c47\u603b" },
     { label: "\u672c\u6708\u603b\u8fdb\u8d27\u82b1\u8d39", value: yuan(monthMetrics.totals.purchaseTotal), sub: "\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
-    { label: "\u672c\u6708\u6bdb\u5229\u6da6", value: yuan(monthMetrics.totals.grossProfit), sub: "\u9500\u552e - \u8fdb\u8d27" },
-    { label: "\u672c\u6708\u5b9e\u9645\u5229\u6da6", value: yuan(monthMetrics.totals.actualProfit), sub: "\u6bdb\u5229\u6da6 - \u652f\u51fa" }
+    { label: monthMetrics.profitFinalized ? "\u672c\u6708\u6bdb\u5229\u6da6" : "\u672c\u6708\u53c2\u8003\u6bdb\u5229", value: profitDisplayValue(monthMetrics.totals.finalGrossProfit, monthMetrics.totals.referenceGrossProfit), sub: monthMetrics.profitFinalized ? "\u5df2\u6309\u6708\u5e95\u5e93\u5b58\u5b9a\u7a3f" : "\u53c2\u8003\u503c\uff0c\u5f85\u6708\u5e95\u76d8\u5e93\u540e\u5b9a\u7a3f" },
+    { label: monthMetrics.profitFinalized ? "\u672c\u6708\u5b9e\u9645\u5229\u6da6" : "\u672c\u6708\u53c2\u8003\u5229\u6da6", value: profitDisplayValue(monthMetrics.totals.finalActualProfit, monthMetrics.totals.referenceActualProfit), sub: monthMetrics.profitFinalized ? "\u6bdb\u5229\u6da6 - \u652f\u51fa" : "\u5f53\u524d\u5148\u6309\u9500\u552e - \u8fdb\u8d27 - \u652f\u51fa\u663e\u793a" }
   ];
   const yearCards = [
     { label: "\u672c\u5e74\u6709\u9500\u552e\u5929\u6570", value: String(yearMetrics.salesDays), sub: "\u53ea\u7edf\u8ba1\u9500\u552e\u603b\u989d\u5927\u4e8e0\u7684\u5929" },
-    { label: "\u672c\u5e74\u9500\u552e\u603b\u989d", value: yuan(yearMetrics.totals.salesTotal), sub: "\u6309" + yearMetrics.key + "\u5e74\u9500\u552e\u603b\u989d\u6c47\u603b" },
+    { label: "\u672c\u5e74\u9500\u552e\u603b\u989d", value: yuan(yearMetrics.totals.salesTotal), sub: "\u53ea\u6c47\u603b\u5df2\u5b9a\u7a3f\u6708\u4efd" },
     { label: "\u672c\u5e74\u5e73\u5747\u9500\u552e\u989d", value: yuan(yearMetrics.totals.averageSales), sub: "\u6309" + yearMetrics.key + "\u5e74\u7edf\u8ba1" },
     { label: "\u672c\u5e74\u4f1a\u5458\u5361\u6536\u5165", value: yuan(yearMetrics.totals.memberCardAmount), sub: "\u6309" + yearMetrics.key + "\u5e74\u4f1a\u5458\u5361\u53e3\u5f84\u6c47\u603b" },
     { label: "\u672c\u5e74\u603b\u8fdb\u8d27\u82b1\u8d39", value: yuan(yearMetrics.totals.purchaseTotal), sub: "\u8fdb\u8d27\u8bb0\u5f55\u6c47\u603b" },
-    { label: "\u672c\u5e74\u6bdb\u5229\u6da6", value: yuan(yearMetrics.totals.grossProfit), sub: "\u9500\u552e - \u8fdb\u8d27" },
-    { label: "\u672c\u5e74\u5b9e\u9645\u5229\u6da6", value: yuan(yearMetrics.totals.actualProfit), sub: "\u6bdb\u5229\u6da6 - \u652f\u51fa" }
+    { label: "\u672c\u5e74\u6bdb\u5229\u6da6", value: yuan(yearMetrics.totals.grossProfit), sub: (yearMetrics.finalizedMonths && yearMetrics.finalizedMonths.length ? "\u5df2\u5b9a\u7a3f " + yearMetrics.finalizedMonths.length + " \u4e2a\u6708" : "\u5f53\u524d\u8fd8\u6ca1\u6709\u5b9a\u7a3f\u6708\u4efd") },
+    { label: "\u672c\u5e74\u5b9e\u9645\u5229\u6da6", value: yuan(yearMetrics.totals.actualProfit), sub: (yearMetrics.pendingMonths && yearMetrics.pendingMonths.length ? "\u5f85\u76d8\u5e93\u6708\u4efd\uff1a" + yearMetrics.pendingMonths.join("\u3001") : "\u6bdb\u5229\u6da6 - \u652f\u51fa") }
   ];
   function renderMetricCards(targetId, cards) {
     byId(targetId).innerHTML = cards.map(function (item) {
@@ -831,6 +868,26 @@ function fillLedgerForm() {
     form.elements[key].value = ledger[key];
   });
   form.elements.note.value = ledger.note || "";
+  updateInventoryAmountFieldState();
+}
+
+function updateInventoryAmountFieldState() {
+  const form = byId("ledgerForm");
+  if (!form) {
+    return;
+  }
+  const activeDate = byId("activeDate");
+  const date = activeDate ? activeDate.value : "";
+  const inventoryInput = form.elements.inventoryAmount;
+  const hint = byId("inventoryAmountHint");
+  const editable = isMonthEndDate(date);
+  inventoryInput.disabled = !editable;
+  if (!editable && state.ledgerBundle && state.ledgerBundle.ledger) {
+    inventoryInput.value = state.ledgerBundle.ledger.inventoryAmount;
+  }
+  if (hint) {
+    hint.textContent = inventoryAmountHintText(date);
+  }
 }
 
 function updateSaleProductOptions() {
@@ -1190,6 +1247,285 @@ function renderReports() {
           ["门店", "销售总额", "实际收款", "进货总额", "支出总额", "经营利润"],
           monthly.storeSalesSummary.map(function (item) {
             return [item.storeName, yuan(item.salesTotal), yuan(item.actualReceived), yuan(item.purchaseTotal), yuan(item.expenseTotal || 0), yuan(item.actualProfit)];
+          })
+        )
+      : '<div class="empty">当前是单门店视图，或暂时没有门店经营汇总数据。</div>';
+  }
+}
+
+function renderOverviewV2() {
+  if (!state.overviewBundle || !isOwner()) {
+    return;
+  }
+  const ledger = state.overviewBundle.ledger;
+  const overviewMetrics = state.overviewBundle.overviewMetrics || {};
+  const rangeMetrics = state.overviewRange || null;
+  const activeMonth = byId("activeMonth").value;
+  const dayPurchaseTotal = (state.purchases || []).reduce(function sumPurchaseTotal(total, item) {
+    return total + Number(item.totalCost || 0);
+  }, 0);
+  const monthMetrics = overviewMetrics.month && overviewMetrics.month.totals
+    ? overviewMetrics.month
+    : { key: activeMonth, salesDays: 0, profitFinalized: true, totals: { averageSales: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0, referenceGrossProfit: 0, referenceActualProfit: 0 } };
+  const yearMetrics = overviewMetrics.year && overviewMetrics.year.totals
+    ? overviewMetrics.year
+    : { key: String(activeMonth || "").slice(0, 4), salesDays: 0, finalizedMonths: [], pendingMonths: [], totals: { averageSales: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 } };
+  const salesTotal = toNumber(ledger.salesTotal);
+  const grossProfit = toNumber(ledger.grossProfit);
+  const actualProfit = toNumber(ledger.actualProfit);
+  const expenseTotal = toNumber(ledger.expenseTotal);
+  const monthSalesTotal = toNumber(monthMetrics.totals.salesTotal);
+  const monthGrossProfit = effectiveProfitNumber(monthMetrics.totals.finalGrossProfit, monthMetrics.totals.referenceGrossProfit);
+  const monthActualProfit = effectiveProfitNumber(monthMetrics.totals.finalActualProfit, monthMetrics.totals.referenceActualProfit);
+  const monthExpenseTotal = toNumber(monthMetrics.totals.expenseTotal);
+  const yearSalesTotal = toNumber(yearMetrics.totals.salesTotal);
+  const yearGrossProfit = toNumber(yearMetrics.totals.grossProfit);
+  const yearActualProfit = toNumber(yearMetrics.totals.actualProfit);
+  const alerts = buildOverviewAlerts(ledger, {
+    salesDays: monthMetrics.salesDays,
+    totals: {
+      salesTotal: monthMetrics.totals.salesTotal,
+      grossProfit: monthGrossProfit,
+      actualProfit: monthActualProfit,
+      expenseTotal: monthMetrics.totals.expenseTotal
+    }
+  }, dayPurchaseTotal);
+  const grossMargin = formatPercent(ratioPercent(monthGrossProfit, monthSalesTotal));
+  const actualMargin = formatPercent(ratioPercent(monthActualProfit, monthSalesTotal));
+  const monthExpenseRatio = formatPercent(ratioPercent(monthExpenseTotal, monthSalesTotal));
+  const yearActualMargin = formatPercent(ratioPercent(yearActualProfit, yearSalesTotal));
+
+  byId("overviewProfitFocus").innerHTML = [
+    '<div class="profit-focus-main">',
+    '  <div class="profit-main-kicker">' + (monthMetrics.profitFinalized ? '本月实际利润' : '本月参考利润') + '</div>',
+    '  <div class="profit-main-value">' + profitDisplayValue(monthMetrics.totals.finalActualProfit, monthMetrics.totals.referenceActualProfit) + '</div>',
+    '  <div class="profit-main-sub">' + (monthMetrics.profitFinalized
+      ? ('本月毛利 ' + yuan(monthGrossProfit) + '，再减去本月支出 ' + yuan(monthExpenseTotal))
+      : ('月底库存还未提交，当前先按销售 - 进货 - 支出显示参考利润。月底盘库日：' + (monthMetrics.monthEndDate || monthMetrics.key))) + '</div>',
+    '</div>',
+    '<div class="profit-focus-grid-inner">',
+    '  <article class="profit-stat-card">',
+    '    <span>本月毛利</span>',
+    '    <strong>' + profitDisplayValue(monthMetrics.totals.finalGrossProfit, monthMetrics.totals.referenceGrossProfit) + '</strong>',
+    '    <small>' + (monthMetrics.profitFinalized ? ('毛利率 ' + grossMargin) : '参考值，待月底盘库后定稿') + '</small>',
+    '  </article>',
+    '  <article class="profit-stat-card">',
+    '    <span>' + (monthMetrics.profitFinalized ? '本月实际利润' : '本月参考利润') + '</span>',
+    '    <strong>' + profitDisplayValue(monthMetrics.totals.finalActualProfit, monthMetrics.totals.referenceActualProfit) + '</strong>',
+    '    <small>' + (monthMetrics.profitFinalized ? ('实际利润率 ' + actualMargin) : '月底提交库存后自动定稿') + '</small>',
+    '  </article>',
+    '  <article class="profit-stat-card">',
+    '    <span>本月销售总额</span>',
+    '    <strong>' + yuan(monthSalesTotal) + '</strong>',
+    '    <small>有销售 ' + monthMetrics.salesDays + ' 天</small>',
+    '  </article>',
+    '  <article class="profit-stat-card">',
+    '    <span>本月支出拖累</span>',
+    '    <strong>' + yuan(monthExpenseTotal) + '</strong>',
+    '    <small>占本月销售额 ' + monthExpenseRatio + '</small>',
+    '  </article>',
+    '  <article class="profit-stat-card">',
+    '    <span>本年毛利</span>',
+    '    <strong>' + yuan(yearGrossProfit) + '</strong>',
+    '    <small>只汇总已定稿月份' + (yearMetrics.finalizedMonths && yearMetrics.finalizedMonths.length ? '（' + yearMetrics.finalizedMonths.length + '个月）' : '') + '</small>',
+    '  </article>',
+    '  <article class="profit-stat-card">',
+    '    <span>本年实际利润</span>',
+    '    <strong>' + yuan(yearActualProfit) + '</strong>',
+    '    <small>' + ((yearMetrics.pendingMonths && yearMetrics.pendingMonths.length) ? ('还有 ' + yearMetrics.pendingMonths.length + ' 个月待月底盘库') : ('实际利润率 ' + yearActualMargin)) + '</small>',
+    '  </article>',
+    '</div>'
+  ].join("");
+
+  const riskAlerts = alerts.filter(function filterRisk(item) {
+    return item.tone === "danger";
+  });
+  const checkAlerts = alerts.filter(function filterCheck(item) {
+    return item.tone === "warn" || item.tone === "info";
+  });
+  const normalAlerts = alerts.filter(function filterNormal(item) {
+    return item.tone === "good";
+  });
+  byId("overviewAlerts").innerHTML = [
+    renderAlertGroup("风险提醒", riskAlerts, "alert-group-risk"),
+    renderAlertGroup("需要核对", checkAlerts, "alert-group-check"),
+    renderAlertGroup("正常", normalAlerts, "alert-group-normal")
+  ].join("") || '<div class="empty">暂时没有可用提醒。</div>';
+
+  const dayCards = [
+    { label: "今日销售总额", value: yuan(ledger.salesTotal), sub: "以当天快速记账为准" },
+    { label: "今日实际收款", value: yuan(ledger.actualReceived), sub: "现金、微信、支付宝、会员卡" },
+    { label: "今日支出", value: yuan(ledger.expenseTotal), sub: "当天支出合计" },
+    { label: "当日进货支出", value: yuan(dayPurchaseTotal), sub: "按当天进货记录汇总" },
+    { label: "今日会员卡收入", value: yuan(ledger.memberCardAmount), sub: "当天已记录的会员卡收入" }
+  ];
+  const monthCards = [
+    { label: "本月有销售天数", value: String(monthMetrics.salesDays), sub: "只统计销售总额大于 0 的天" },
+    { label: "本月销售总额", value: yuan(monthMetrics.totals.salesTotal), sub: "按 " + monthMetrics.key + " 销售总额汇总" },
+    { label: "本月平均销售额", value: yuan(monthMetrics.totals.averageSales), sub: "按 " + monthMetrics.key + " 统计" },
+    { label: "本月会员卡收入", value: yuan(monthMetrics.totals.memberCardAmount), sub: "按 " + monthMetrics.key + " 会员卡口径汇总" },
+    { label: "本月总进货花费", value: yuan(monthMetrics.totals.purchaseTotal), sub: "进货记录汇总" },
+    { label: monthMetrics.profitFinalized ? "本月毛利润" : "本月参考毛利", value: profitDisplayValue(monthMetrics.totals.finalGrossProfit, monthMetrics.totals.referenceGrossProfit), sub: monthMetrics.profitFinalized ? "已按月底库存定稿" : "参考值，待月底盘库后定稿" },
+    { label: monthMetrics.profitFinalized ? "本月实际利润" : "本月参考利润", value: profitDisplayValue(monthMetrics.totals.finalActualProfit, monthMetrics.totals.referenceActualProfit), sub: monthMetrics.profitFinalized ? "毛利润 - 支出" : "当前先按销售 - 进货 - 支出显示" }
+  ];
+  const yearCards = [
+    { label: "本年有销售天数", value: String(yearMetrics.salesDays), sub: "只统计已定稿月份里的销售天" },
+    { label: "本年销售总额", value: yuan(yearMetrics.totals.salesTotal), sub: "只汇总已定稿月份" },
+    { label: "本年平均销售额", value: yuan(yearMetrics.totals.averageSales), sub: "按 " + yearMetrics.key + " 年统计" },
+    { label: "本年会员卡收入", value: yuan(yearMetrics.totals.memberCardAmount), sub: "按 " + yearMetrics.key + " 年会员卡口径汇总" },
+    { label: "本年总进货花费", value: yuan(yearMetrics.totals.purchaseTotal), sub: "只汇总已定稿月份" },
+    { label: "本年毛利润", value: yuan(yearMetrics.totals.grossProfit), sub: yearMetrics.finalizedMonths && yearMetrics.finalizedMonths.length ? ("已定稿 " + yearMetrics.finalizedMonths.length + " 个月") : "当前还没有定稿月份" },
+    { label: "本年实际利润", value: yuan(yearMetrics.totals.actualProfit), sub: yearMetrics.pendingMonths && yearMetrics.pendingMonths.length ? ("待盘库月份：" + yearMetrics.pendingMonths.join("、")) : "毛利润 - 支出" }
+  ];
+  function renderMetricCards(targetId, cards) {
+    byId(targetId).innerHTML = cards.map(function (item) {
+      return '<article class="metric-card"><div class="label">' + item.label + '</div><div class="value">' + item.value + '</div><div class="sub">' + item.sub + "</div></article>";
+    }).join("");
+  }
+  renderMetricCards("overviewDayCards", dayCards);
+  renderMetricCards("overviewMonthCards", monthCards);
+  renderMetricCards("overviewYearCards", yearCards);
+  const rangeCards = rangeMetrics
+    ? [
+        { label: "区间销售总额", value: yuan(rangeMetrics.totals.salesTotal), sub: "从 " + rangeMetrics.fromDate + " 到 " + rangeMetrics.toDate },
+        { label: "区间会员卡收入", value: yuan(rangeMetrics.totals.memberCardAmount), sub: "区间内会员卡收入汇总" },
+        { label: "区间支出总额", value: yuan(rangeMetrics.totals.expenseTotal), sub: "区间内支出记录汇总" },
+        { label: "区间进货总额", value: yuan(rangeMetrics.totals.purchaseTotal), sub: "区间内进货记录汇总" },
+        { label: "区间平均销售额", value: yuan(rangeMetrics.totals.averageSales), sub: rangeMetrics.salesDays + " 个有销售日" },
+        { label: "区间毛利润", value: yuan(rangeMetrics.totals.grossProfit), sub: "销售 - 进货" },
+        { label: "区间实际利润", value: yuan(rangeMetrics.totals.actualProfit), sub: "毛利润 - 支出" },
+        { label: "区间实际收款", value: yuan(rangeMetrics.totals.actualReceived), sub: "按记账已录入的实收口径" }
+      ]
+    : [];
+  renderMetricCards("overviewRangeCards", rangeCards);
+  byId("overviewRangeMeta").textContent = rangeMetrics
+    ? ("查询区间：" + rangeMetrics.fromDate + " 至 " + rangeMetrics.toDate + "，有销售数据 " + rangeMetrics.salesDays + " 天。")
+    : "";
+  byId("topProductsTable").innerHTML = state.overviewBundle.topProducts.length
+    ? tableHtml(
+        ["商品", "销量", "金额"],
+        state.overviewBundle.topProducts.map(function (item) {
+          return [
+            item.name + ' <span class="pill">' + (item.saleMode === "weight" ? "按重量" : "按份数") + "</span>",
+            item.totalQuantity + item.unit,
+            yuan(item.totalAmount)
+          ];
+        })
+      )
+    : '<div class="empty">当天还没有单品销售数据。</div>';
+
+  byId("expenseSnapshot").innerHTML = state.overviewBundle.expenses.length
+    ? '<div class="snapshot-list">' + state.overviewBundle.expenses.map(function (item) {
+        return '<div class="snapshot-item"><span>' + expenseTypeText(item.expenseType, item.expenseLabel) + (item.note ? " | " + item.note : "") + "</span><strong>" + yuan(item.amount) + "</strong></div>";
+      }).join("") + "</div>"
+    : '<div class="empty">当天还没有支出记录。</div>';
+}
+
+function renderReportsV2() {
+  if (!state.monthlySummary || !isOwner()) {
+    return;
+  }
+  const daily = state.ledgerBundle.ledger;
+  byId("dailyReport").innerHTML = '<div class="report-list">' + [
+    ["销售总额", yuan(daily.salesTotal)],
+    ["实际收款", yuan(daily.actualReceived)],
+    ["会员卡收入", yuan(daily.memberCardAmount)],
+    ["支出合计", yuan(daily.expenseTotal)],
+    ["进货合计", yuan(daily.purchaseTotal)],
+    ["现金 / 微信 / 支付宝 / 会员卡", yuan(daily.cashAmount) + " / " + yuan(daily.wechatAmount) + " / " + yuan(daily.alipayAmount) + " / " + yuan(daily.memberCardAmount)],
+    ["退款 / 抹零", yuan(daily.refundAmount) + " / " + yuan(daily.roundingAmount)]
+  ].map(function (item) {
+    return '<div class="report-item"><span>' + item[0] + "</span><strong>" + item[1] + "</strong></div>";
+  }).join("") + "</div>";
+
+  const monthly = state.monthlySummary;
+  const monthHtml = '<div class="report-list">' + [
+    ["本月销售总额", yuan(monthly.totals.salesTotal)],
+    ["本月实际收款", yuan(monthly.totals.actualReceived)],
+    ["本月会员卡收入", yuan(monthly.totals.memberCardAmount)],
+    ["本月支出合计", yuan(monthly.totals.expenseTotal)],
+    ["本月进货合计", yuan(monthly.totals.purchaseTotal)],
+    ["利润状态", monthly.profitFinalized ? "已定稿" : "参考值（待月底盘库）"],
+    [monthly.profitFinalized ? "本月毛利润" : "本月参考毛利", profitDisplayValue(monthly.totals.finalGrossProfit, monthly.totals.referenceGrossProfit)],
+    [monthly.profitFinalized ? "本月实际利润" : "本月参考利润", profitDisplayValue(monthly.totals.finalActualProfit, monthly.totals.referenceActualProfit)],
+    ["录入天数", String(monthly.days.length)],
+    ["本月进货总额", yuan((monthly.purchaseSummary && monthly.purchaseSummary.totalCost) || 0)],
+    ["本月进货单数", String((monthly.purchaseSummary && monthly.purchaseSummary.orderCount) || 0)],
+    ["本月进货笔数", String((monthly.purchaseSummary && monthly.purchaseSummary.entryCount) || 0)],
+    ["本月进货商品种数", String((monthly.purchaseSummary && monthly.purchaseSummary.productCount) || 0)]
+  ].map(function (item) {
+    return '<div class="report-item"><span>' + item[0] + "</span><strong>" + item[1] + "</strong></div>";
+  }).join("") + "</div>";
+
+  const topHtml = monthly.topProducts.length
+    ? tableHtml(
+        ["热销商品", "累计销量", "累计金额"],
+        monthly.topProducts.map(function (item) {
+          return [item.name, item.totalQuantity + item.unit, yuan(item.totalAmount)];
+        })
+      )
+    : '<div class="empty">本月还没有单品排行数据。</div>';
+
+  const purchaseProductSummaryHtml = monthly.purchaseProductSummary && monthly.purchaseProductSummary.length
+    ? reportSectionHtml("进货商品汇总", tableHtml(
+        ["进货商品", "月累计数量", "单位", "月累计进货额", "进货笔数", "最近进价", "供应商"],
+        monthly.purchaseProductSummary.map(function (item) {
+          return [
+            item.productName,
+            String(item.totalQuantity),
+            item.unit || "-",
+            yuan(item.totalCost),
+            String(item.entryCount),
+            yuan(item.lastUnitCost),
+            item.supplierSummary || "-"
+          ];
+        })
+      ))
+    : reportSectionHtml("进货商品汇总", '<div class="empty">本月还没有进货商品汇总。</div>');
+
+  const purchaseDailySummaryHtml = monthly.purchaseDailySummary && monthly.purchaseDailySummary.length
+    ? reportSectionHtml("每日进货汇总", tableHtml(
+        ["日期", "门店", "进货单数", "商品种数", "进货笔数", "当日累计数量", "当日进货总额"],
+        monthly.purchaseDailySummary.map(function (item) {
+          return [
+            item.date,
+            item.storeName || "-",
+            String(item.orderCount || 0),
+            String(item.productCount),
+            String(item.entryCount),
+            String(item.totalQuantity),
+            yuan(item.totalCost)
+          ];
+        })
+      ))
+    : reportSectionHtml("每日进货汇总", '<div class="empty">本月还没有每日进货情况。</div>');
+
+  const purchaseHtml = monthly.purchases && monthly.purchases.length
+    ? reportSectionHtml("进货明细", tableHtml(
+        ["日期", "门店", "进货单号", "进货商品", "数量", "进货总额", "供应商"],
+        monthly.purchases.map(function (item) {
+          return [item.date, item.storeName, item.purchaseOrderNo || "-", item.productName, item.quantity + (item.unit ? "（" + item.unit + "）" : ""), yuan(item.totalCost), item.supplier || "-"];
+        })
+      ))
+    : reportSectionHtml("进货明细", '<div class="empty">本月还没有进货明细。</div>');
+
+  byId("monthlyReport").innerHTML = monthHtml + topHtml + purchaseProductSummaryHtml + purchaseDailySummaryHtml + purchaseHtml;
+
+  const storeTarget = byId("storeSalesSummary");
+  if (storeTarget) {
+    storeTarget.innerHTML = monthly.storeSalesSummary && monthly.storeSalesSummary.length
+      ? tableHtml(
+          ["门店", "利润状态", "销售总额", "实际收款", "进货总额", "支出总额", "经营利润"],
+          monthly.storeSalesSummary.map(function (item) {
+            return [
+              item.storeName,
+              item.profitFinalized ? "已定稿" : "参考值",
+              yuan(item.salesTotal),
+              yuan(item.actualReceived),
+              yuan(item.purchaseTotal),
+              yuan(item.expenseTotal || 0),
+              profitDisplayValue(item.finalActualProfit, item.referenceActualProfit)
+            ];
           })
         )
       : '<div class="empty">当前是单门店视图，或暂时没有门店经营汇总数据。</div>';
@@ -1703,10 +2039,10 @@ async function loadDashboardData() {
   renderExpenses();
   renderMonthlyExpenseSummary();
   if (isOwner()) {
-    renderOverview();
+    renderOverviewV2();
     renderProducts();
     renderPurchaseProducts();
-    renderReports();
+    renderReportsV2();
     renderAnalytics();
   }
 }
@@ -1789,7 +2125,9 @@ async function submitLedgerForm(event) {
   form.elements.wechatAmount.value = normalizeLedgerMoneyInput(form.elements.wechatAmount.value);
   form.elements.alipayAmount.value = normalizeLedgerMoneyInput(form.elements.alipayAmount.value);
   form.elements.memberCardAmount.value = normalizeLedgerMoneyInput(form.elements.memberCardAmount.value);
-  form.elements.inventoryAmount.value = normalizeLedgerMoneyInput(form.elements.inventoryAmount.value);
+  if (isMonthEndDate(byId("activeDate").value)) {
+    form.elements.inventoryAmount.value = normalizeLedgerMoneyInput(form.elements.inventoryAmount.value);
+  }
 
   syncLedgerSalesAndReceived(form);
   form.elements.salesTotal.value = normalizeLedgerMoneyInput(form.elements.salesTotal.value);
@@ -2344,6 +2682,7 @@ async function bootstrap() {
   bindById("activeDate", "change", function () {
     state.receiptScan = null;
     renderReceiptRecognition();
+    updateInventoryAmountFieldState();
     loadDashboardData();
   });
   bindById("activeMonth", "change", function () {

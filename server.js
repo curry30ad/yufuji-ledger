@@ -241,6 +241,25 @@ function buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal) {
   };
 }
 
+function getMonthEndDate(month) {
+  const parts = String(month || "").split("-");
+  const year = Number(parts[0]);
+  const monthNumber = Number(parts[1]);
+  if (!year || !monthNumber) {
+    return String(month || "") + "-31";
+  }
+  return new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+}
+
+function isMonthEndDate(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) {
+    return false;
+  }
+  const current = new Date(date + "T00:00:00Z");
+  const next = new Date(current.getTime() + 24 * 60 * 60 * 1000);
+  return next.toISOString().slice(0, 7) !== String(date).slice(0, 7);
+}
+
 function getLatestInventoryAmountBeforeDate(api, date, storeName) {
   const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
   if (normalizedStoreName) {
@@ -294,6 +313,203 @@ function buildPeriodProfitMetrics(api, salesTotal, purchaseTotal, expenseTotal, 
     grossProfit: profitMetrics.grossProfit,
     actualProfit: profitMetrics.actualProfit,
     profit: profitMetrics.actualProfit
+  };
+}
+
+function getMonthActivityStores(api, month, storeName) {
+  const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
+  if (normalizedStoreName) {
+    return [normalizedStoreName];
+  }
+
+  const fromDate = month + "-01";
+  const toDate = getMonthEndDate(month);
+  const storeRows = api.all(
+    "SELECT DISTINCT store_name FROM (" +
+      "SELECT store_name FROM daily_ledgers WHERE ledger_date BETWEEN ? AND ? " +
+      "UNION SELECT store_name FROM purchase_entries WHERE purchase_date BETWEEN ? AND ? " +
+      "UNION SELECT store_name FROM expense_entries WHERE expense_date BETWEEN ? AND ?" +
+    ") ORDER BY store_name ASC",
+    [fromDate, toDate, fromDate, toDate, fromDate, toDate]
+  );
+  return storeRows.map(function mapStore(row) {
+    return normalizeStoreName(row.store_name);
+  }).filter(Boolean);
+}
+
+function isMonthProfitFinalized(api, month, storeName) {
+  const monthEndDate = getMonthEndDate(month);
+  const stores = getMonthActivityStores(api, month, storeName);
+  if (!stores.length) {
+    return true;
+  }
+  return stores.every(function hasMonthEndLedger(itemStoreName) {
+    return !!api.one(
+      "SELECT id FROM daily_ledgers WHERE store_name = ? AND ledger_date = ? LIMIT 1",
+      [itemStoreName, monthEndDate]
+    );
+  });
+}
+
+function summarizeMonthlyProfit(api, month, storeName) {
+  const fromDate = month + "-01";
+  const toDate = getMonthEndDate(month);
+  const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
+  const ledgerFilter = buildStoreFilter("store_name", normalizedStoreName);
+  const ledgerRows = api.all(
+    "SELECT ledger_date, ROUND(SUM(sales_total), 2) AS sales_total, ROUND(SUM(actual_received), 2) AS actual_received, ROUND(SUM(member_card_amount), 2) AS member_card_amount FROM daily_ledgers WHERE ledger_date BETWEEN ? AND ?" + ledgerFilter.clause + " GROUP BY ledger_date ORDER BY ledger_date ASC",
+    [fromDate, toDate].concat(ledgerFilter.params)
+  );
+  const expenseFilter = buildStoreFilter("store_name", normalizedStoreName);
+  const expenseRows = api.all(
+    "SELECT expense_date, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ? AND COALESCE(exclude_from_accounting, 0) = 0" + expenseFilter.clause + " GROUP BY expense_date",
+    [fromDate, toDate].concat(expenseFilter.params)
+  );
+  const purchaseFilter = buildStoreFilter("store_name", normalizedStoreName);
+  const purchaseRows = api.all(
+    "SELECT purchase_date, ROUND(SUM(total_cost), 2) AS total FROM purchase_entries WHERE purchase_date BETWEEN ? AND ?" + purchaseFilter.clause + " GROUP BY purchase_date",
+    [fromDate, toDate].concat(purchaseFilter.params)
+  );
+  const expenseMap = {};
+  const purchaseMap = {};
+  expenseRows.forEach(function buildExpenseMap(row) {
+    expenseMap[row.expense_date] = money(row.total);
+  });
+  purchaseRows.forEach(function buildPurchaseMap(row) {
+    purchaseMap[row.purchase_date] = money(row.total);
+  });
+
+  const days = ledgerRows.map(function mapDay(row) {
+    const expenseTotal = money(expenseMap[row.ledger_date] || 0);
+    const purchaseTotal = money(purchaseMap[row.ledger_date] || 0);
+    const salesTotal = money(row.sales_total);
+    const profitMetrics = buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal);
+    return {
+      date: row.ledger_date,
+      storeName: normalizedStoreName || "All Stores",
+      salesTotal: salesTotal,
+      actualReceived: money(row.actual_received),
+      memberCardAmount: money(row.member_card_amount),
+      expenseTotal: expenseTotal,
+      purchaseTotal: purchaseTotal,
+      costOfGoodsSold: purchaseTotal,
+      openingInventoryAmount: null,
+      endingInventoryAmount: null,
+      grossProfit: profitMetrics.grossProfit,
+      actualProfit: profitMetrics.actualProfit,
+      profit: profitMetrics.actualProfit
+    };
+  });
+
+  const totals = days.reduce(
+    function reduceTotal(acc, day) {
+      acc.salesTotal += day.salesTotal;
+      acc.actualReceived += day.actualReceived;
+      acc.memberCardAmount += day.memberCardAmount;
+      acc.expenseTotal += day.expenseTotal;
+      acc.purchaseTotal += day.purchaseTotal;
+      return acc;
+    },
+    { salesTotal: 0, actualReceived: 0, memberCardAmount: 0, expenseTotal: 0, purchaseTotal: 0 }
+  );
+  const salesDays = days.filter(function filterSalesDay(day) {
+    return day.salesTotal > 0;
+  }).length;
+  const referenceProfitMetrics = buildProfitMetrics(totals.salesTotal, totals.purchaseTotal, totals.expenseTotal);
+  const profitFinalized = isMonthProfitFinalized(api, month, normalizedStoreName);
+  const finalProfitMetrics = profitFinalized
+    ? buildPeriodProfitMetrics(api, totals.salesTotal, totals.purchaseTotal, totals.expenseTotal, fromDate, toDate, normalizedStoreName)
+    : null;
+
+  return {
+    month: month,
+    monthEndDate: toDate,
+    profitFinalized: profitFinalized,
+    salesDays: salesDays,
+    totals: {
+      salesTotal: money(totals.salesTotal),
+      actualReceived: money(totals.actualReceived),
+      memberCardAmount: money(totals.memberCardAmount),
+      expenseTotal: money(totals.expenseTotal),
+      purchaseTotal: money(totals.purchaseTotal),
+      averageSales: salesDays ? money(totals.salesTotal / salesDays) : 0,
+      openingInventoryAmount: finalProfitMetrics ? finalProfitMetrics.openingInventoryAmount : null,
+      endingInventoryAmount: finalProfitMetrics ? finalProfitMetrics.endingInventoryAmount : null,
+      costOfGoodsSold: finalProfitMetrics ? finalProfitMetrics.costOfGoodsSold : money(totals.purchaseTotal),
+      referenceGrossProfit: referenceProfitMetrics.grossProfit,
+      referenceActualProfit: referenceProfitMetrics.actualProfit,
+      finalGrossProfit: finalProfitMetrics ? finalProfitMetrics.grossProfit : null,
+      finalActualProfit: finalProfitMetrics ? finalProfitMetrics.actualProfit : null,
+      grossProfit: finalProfitMetrics ? finalProfitMetrics.grossProfit : referenceProfitMetrics.grossProfit,
+      actualProfit: finalProfitMetrics ? finalProfitMetrics.actualProfit : referenceProfitMetrics.actualProfit,
+      profit: finalProfitMetrics ? finalProfitMetrics.actualProfit : referenceProfitMetrics.actualProfit
+    },
+    days: days
+  };
+}
+
+function getYearProfitSummary(api, year, storeName) {
+  const yearKey = String(year || "");
+  const months = [];
+  for (let index = 1; index <= 12; index += 1) {
+    months.push(yearKey + "-" + String(index).padStart(2, "0"));
+  }
+  const totals = {
+    salesTotal: 0,
+    actualReceived: 0,
+    memberCardAmount: 0,
+    expenseTotal: 0,
+    purchaseTotal: 0,
+    grossProfit: 0,
+    actualProfit: 0
+  };
+  let salesDays = 0;
+  const finalizedMonths = [];
+  const pendingMonths = [];
+
+  months.forEach(function collectMonth(month) {
+    const summary = summarizeMonthlyProfit(api, month, storeName);
+    const hasActivity = summary.days.length > 0 || summary.totals.purchaseTotal > 0 || summary.totals.expenseTotal > 0;
+    if (!hasActivity) {
+      return;
+    }
+    if (summary.profitFinalized) {
+      finalizedMonths.push(month);
+      salesDays += summary.salesDays;
+      totals.salesTotal += summary.totals.salesTotal;
+      totals.actualReceived += summary.totals.actualReceived;
+      totals.memberCardAmount += summary.totals.memberCardAmount;
+      totals.expenseTotal += summary.totals.expenseTotal;
+      totals.purchaseTotal += summary.totals.purchaseTotal;
+      totals.grossProfit += summary.totals.finalGrossProfit || 0;
+      totals.actualProfit += summary.totals.finalActualProfit || 0;
+      return;
+    }
+    pendingMonths.push(month);
+  });
+
+  return {
+    key: yearKey,
+    fromDate: yearKey + "-01-01",
+    toDate: yearKey + "-12-31",
+    salesDays: salesDays,
+    profitFinalized: !pendingMonths.length,
+    finalizedMonths: finalizedMonths,
+    pendingMonths: pendingMonths,
+    totals: {
+      salesTotal: money(totals.salesTotal),
+      actualReceived: money(totals.actualReceived),
+      memberCardAmount: money(totals.memberCardAmount),
+      expenseTotal: money(totals.expenseTotal),
+      purchaseTotal: money(totals.purchaseTotal),
+      averageSales: salesDays ? money(totals.salesTotal / salesDays) : 0,
+      openingInventoryAmount: null,
+      endingInventoryAmount: null,
+      costOfGoodsSold: money(totals.salesTotal - totals.grossProfit),
+      grossProfit: money(totals.grossProfit),
+      actualProfit: money(totals.actualProfit),
+      profit: money(totals.actualProfit)
+    }
   };
 }
 
@@ -890,12 +1106,35 @@ function ensureLedger(api, date, userId, storeName) {
   if (ledger) {
     return ledger;
   }
+  const inheritedInventoryAmount = getLatestInventoryAmountBeforeDate(api, date, normalizedStoreName);
 
   api.run(
-    "INSERT INTO daily_ledgers (ledger_date, store_name, sales_total, actual_received, cash_amount, wechat_amount, alipay_amount, member_card_amount, refund_amount, rounding_amount, note, created_by, updated_by, created_at, updated_at) VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, '', ?, ?, ?, ?)",
-    [date, normalizedStoreName, userId || null, userId || null, now, now]
+    "INSERT INTO daily_ledgers (ledger_date, store_name, sales_total, actual_received, cash_amount, wechat_amount, alipay_amount, member_card_amount, refund_amount, rounding_amount, inventory_amount, note, created_by, updated_by, created_at, updated_at) VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, ?, '', ?, ?, ?, ?)",
+    [date, normalizedStoreName, inheritedInventoryAmount, userId || null, userId || null, now, now]
   );
   return api.one("SELECT * FROM daily_ledgers WHERE ledger_date = ? AND store_name = ?", [date, normalizedStoreName]);
+}
+
+function buildTransientLedger(date, storeName, inventoryAmount) {
+  return {
+    id: null,
+    ledger_date: date,
+    store_name: storeName,
+    sales_total: 0,
+    actual_received: 0,
+    cash_amount: 0,
+    wechat_amount: 0,
+    alipay_amount: 0,
+    member_card_amount: 0,
+    refund_amount: 0,
+    rounding_amount: 0,
+    inventory_amount: money(inventoryAmount),
+    note: "",
+    created_by: null,
+    updated_by: null,
+    created_at: null,
+    updated_at: null
+  };
 }
 
 function getExpensesTotal(api, date, storeName) {
@@ -1365,46 +1604,25 @@ function getMonthlyPurchaseDailySummary(api, month, storeName) {
 }
 
 function getMonthlyStoreSalesSummary(api, month) {
-  const fromDate = month + "-01";
-  const toDate = month + "-31";
-  const saleRows = api.all(
-    "SELECT store_name, ROUND(SUM(sales_total), 2) AS sales_total, ROUND(SUM(actual_received), 2) AS actual_received FROM daily_ledgers WHERE ledger_date BETWEEN ? AND ? GROUP BY store_name ORDER BY store_name ASC",
-    [fromDate, toDate]
-  );
-  const purchaseRows = api.all(
-    "SELECT store_name, ROUND(SUM(total_cost), 2) AS total_cost FROM purchase_entries WHERE purchase_date BETWEEN ? AND ? GROUP BY store_name ORDER BY store_name ASC",
-    [fromDate, toDate]
-  );
-  const expenseRows = api.all(
-    "SELECT store_name, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ? AND COALESCE(exclude_from_accounting, 0) = 0 GROUP BY store_name ORDER BY store_name ASC",
-    [fromDate, toDate]
-  );
-  const purchaseMap = {};
-  const expenseMap = {};
-  purchaseRows.forEach(function fillPurchaseMap(row) {
-    purchaseMap[normalizeStoreName(row.store_name)] = money(row.total_cost);
-  });
-  expenseRows.forEach(function fillExpenseMap(row) {
-    expenseMap[normalizeStoreName(row.store_name)] = money(row.total);
-  });
-  return saleRows.map(function mapRow(row) {
-    const storeName = normalizeStoreName(row.store_name);
-    const salesTotal = money(row.sales_total);
-    const purchaseTotal = money(purchaseMap[storeName] || 0);
-    const expenseTotal = money(expenseMap[storeName] || 0);
-    const profitMetrics = buildPeriodProfitMetrics(api, salesTotal, purchaseTotal, expenseTotal, fromDate, toDate, storeName);
+  return getMonthActivityStores(api, month, null).map(function mapStore(storeName) {
+    const summary = summarizeMonthlyProfit(api, month, storeName);
     return {
       storeName: storeName,
-      salesTotal: salesTotal,
-      actualReceived: money(row.actual_received),
-      purchaseTotal: purchaseTotal,
-      costOfGoodsSold: profitMetrics.costOfGoodsSold,
-      expenseTotal: expenseTotal,
-      openingInventoryAmount: profitMetrics.openingInventoryAmount,
-      endingInventoryAmount: profitMetrics.endingInventoryAmount,
-      grossProfit: profitMetrics.grossProfit,
-      actualProfit: profitMetrics.actualProfit,
-      profit: profitMetrics.actualProfit
+      salesTotal: summary.totals.salesTotal,
+      actualReceived: summary.totals.actualReceived,
+      purchaseTotal: summary.totals.purchaseTotal,
+      costOfGoodsSold: summary.totals.costOfGoodsSold,
+      expenseTotal: summary.totals.expenseTotal,
+      openingInventoryAmount: summary.totals.openingInventoryAmount,
+      endingInventoryAmount: summary.totals.endingInventoryAmount,
+      profitFinalized: summary.profitFinalized,
+      referenceGrossProfit: summary.totals.referenceGrossProfit,
+      referenceActualProfit: summary.totals.referenceActualProfit,
+      finalGrossProfit: summary.totals.finalGrossProfit,
+      finalActualProfit: summary.totals.finalActualProfit,
+      grossProfit: summary.totals.grossProfit,
+      actualProfit: summary.totals.actualProfit,
+      profit: summary.totals.profit
     };
   });
 }
@@ -1475,7 +1693,13 @@ function getInventorySummary(api, date, storeName) {
 function getLedgerBundle(api, date, storeName) {
   const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
   const ledgerRows = normalizedStoreName
-    ? [ensureLedger(api, date, null, normalizedStoreName)]
+    ? (function resolveLedgerRows() {
+        const existingLedger = api.one("SELECT * FROM daily_ledgers WHERE ledger_date = ? AND store_name = ?", [date, normalizedStoreName]);
+        if (existingLedger) {
+          return [existingLedger];
+        }
+        return [buildTransientLedger(date, normalizedStoreName, getLatestInventoryAmountBeforeDate(api, date, normalizedStoreName))];
+      })()
     : api.all("SELECT * FROM daily_ledgers WHERE ledger_date = ? ORDER BY store_name ASC", [date]);
   const ledger = ledgerRows.length
     ? ledgerRows.reduce(function sumLedger(acc, row) {
@@ -1487,6 +1711,7 @@ function getLedgerBundle(api, date, storeName) {
         acc.member_card_amount += money(row.member_card_amount);
         acc.refund_amount += money(row.refund_amount);
         acc.rounding_amount += money(row.rounding_amount);
+        acc.inventory_amount += money(row.inventory_amount);
         if (row.note) {
           acc.notes.push((row.store_name || DEFAULT_STORE_NAME) + ": " + row.note);
         }
@@ -1503,6 +1728,7 @@ function getLedgerBundle(api, date, storeName) {
         member_card_amount: 0,
         refund_amount: 0,
         rounding_amount: 0,
+        inventory_amount: 0,
         notes: []
       })
     : {
@@ -1517,6 +1743,7 @@ function getLedgerBundle(api, date, storeName) {
         member_card_amount: 0,
         refund_amount: 0,
         rounding_amount: 0,
+        inventory_amount: 0,
         notes: []
       };
   const saleFilter = buildStoreFilter("s.store_name", normalizedStoreName);
@@ -1569,7 +1796,7 @@ function getLedgerBundle(api, date, storeName) {
   const purchaseTotal = purchases.reduce(function sum(total, item) {
     return total + item.totalCost;
   }, 0);
-  const profitMetrics = buildPeriodProfitMetrics(api, ledger.sales_total, purchaseTotal, expenseTotal, ledger.ledger_date, ledger.ledger_date, normalizedStoreName);
+  const referenceProfitMetrics = buildProfitMetrics(ledger.sales_total, purchaseTotal, expenseTotal);
 
   return {
     ledger: {
@@ -1588,12 +1815,12 @@ function getLedgerBundle(api, date, storeName) {
       note: ledger.note || (Array.isArray(ledger.notes) ? ledger.notes.join(" | ") : ""),
       expenseTotal: money(expenseTotal),
       purchaseTotal: money(purchaseTotal),
-      openingInventoryAmount: profitMetrics.openingInventoryAmount,
-      endingInventoryAmount: profitMetrics.endingInventoryAmount,
-      costOfGoodsSold: profitMetrics.costOfGoodsSold,
-      grossProfit: profitMetrics.grossProfit,
-      actualProfit: profitMetrics.actualProfit,
-      profit: profitMetrics.actualProfit
+      openingInventoryAmount: null,
+      endingInventoryAmount: null,
+      costOfGoodsSold: money(purchaseTotal),
+      grossProfit: referenceProfitMetrics.grossProfit,
+      actualProfit: referenceProfitMetrics.actualProfit,
+      profit: referenceProfitMetrics.actualProfit
     },
     sales: sales,
     expenses: expenses,
@@ -1638,7 +1865,7 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
     const salesTotal = money(row.sales_total);
     const expenseTotal = money(expenseMap[row.ledger_date] || 0);
     const purchaseTotal = money(purchaseMap[row.ledger_date] || 0);
-    const profitMetrics = buildPeriodProfitMetrics(api, salesTotal, purchaseTotal, expenseTotal, row.ledger_date, row.ledger_date, normalizedStoreName);
+    const profitMetrics = buildProfitMetrics(salesTotal, purchaseTotal, expenseTotal);
     return {
       date: row.ledger_date,
       salesTotal: salesTotal,
@@ -1646,9 +1873,9 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
       memberCardAmount: money(row.member_card_amount),
       expenseTotal: expenseTotal,
       purchaseTotal: purchaseTotal,
-      costOfGoodsSold: profitMetrics.costOfGoodsSold,
-      openingInventoryAmount: profitMetrics.openingInventoryAmount,
-      endingInventoryAmount: profitMetrics.endingInventoryAmount,
+      costOfGoodsSold: purchaseTotal,
+      openingInventoryAmount: null,
+      endingInventoryAmount: null,
       grossProfit: profitMetrics.grossProfit,
       actualProfit: profitMetrics.actualProfit,
       profit: profitMetrics.actualProfit
@@ -1671,14 +1898,10 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
   const salesDays = days.filter(function filterSalesDay(day) {
     return day.salesTotal > 0;
   }).length;
-  const periodProfitMetrics = buildPeriodProfitMetrics(
-    api,
+  const periodProfitMetrics = buildProfitMetrics(
     totals.salesTotal,
     totals.purchaseTotal,
-    totals.expenseTotal,
-    fromDate,
-    toDate,
-    normalizedStoreName
+    totals.expenseTotal
   );
 
   return {
@@ -1692,9 +1915,9 @@ function getRangeOverview(api, fromDate, toDate, storeName) {
       expenseTotal: money(totals.expenseTotal),
       purchaseTotal: money(totals.purchaseTotal),
       averageSales: salesDays ? money(totals.salesTotal / salesDays) : 0,
-      openingInventoryAmount: periodProfitMetrics.openingInventoryAmount,
-      endingInventoryAmount: periodProfitMetrics.endingInventoryAmount,
-      costOfGoodsSold: periodProfitMetrics.costOfGoodsSold,
+      openingInventoryAmount: null,
+      endingInventoryAmount: null,
+      costOfGoodsSold: money(totals.purchaseTotal),
       grossProfit: periodProfitMetrics.grossProfit,
       actualProfit: periodProfitMetrics.actualProfit,
       profit: periodProfitMetrics.actualProfit
@@ -1708,104 +1931,28 @@ function getOverviewMetrics(api, date, month, storeName) {
   const yearKey = monthKey.slice(0, 4);
   return {
     day: getLedgerBundle(api, date, storeName).ledger,
-    month: Object.assign({ key: monthKey }, getRangeOverview(api, monthKey + "-01", monthKey + "-31", storeName)),
-    year: Object.assign({ key: yearKey }, getRangeOverview(api, yearKey + "-01-01", yearKey + "-12-31", storeName))
+    month: Object.assign({ key: monthKey }, summarizeMonthlyProfit(api, monthKey, storeName)),
+    year: getYearProfitSummary(api, yearKey, storeName)
   };
 }
 
 function getMonthlySummary(api, month, storeName) {
   const fromDate = month + "-01";
-  const toDate = month + "-31";
+  const toDate = getMonthEndDate(month);
   const normalizedStoreName = storeName ? normalizeStoreName(storeName) : null;
-  const ledgerFilter = buildStoreFilter("store_name", normalizedStoreName);
-  const ledgerRows = api.all(
-    "SELECT ledger_date, ROUND(SUM(sales_total), 2) AS sales_total, ROUND(SUM(actual_received), 2) AS actual_received, ROUND(SUM(member_card_amount), 2) AS member_card_amount FROM daily_ledgers WHERE ledger_date BETWEEN ? AND ?" + ledgerFilter.clause + " GROUP BY ledger_date ORDER BY ledger_date ASC",
-    [fromDate, toDate].concat(ledgerFilter.params)
-  );
-  const expenseFilter = buildStoreFilter("store_name", normalizedStoreName);
-  const expenseRows = api.all(
-    "SELECT expense_date, ROUND(SUM(amount), 2) AS total FROM expense_entries WHERE expense_date BETWEEN ? AND ? AND COALESCE(exclude_from_accounting, 0) = 0" + expenseFilter.clause + " GROUP BY expense_date",
-    [fromDate, toDate].concat(expenseFilter.params)
-  );
-  const purchaseFilter = buildStoreFilter("store_name", normalizedStoreName);
-  const purchaseRows = api.all(
-    "SELECT purchase_date, ROUND(SUM(total_cost), 2) AS total FROM purchase_entries WHERE purchase_date BETWEEN ? AND ?" + purchaseFilter.clause + " GROUP BY purchase_date",
-    [fromDate, toDate].concat(purchaseFilter.params)
-  );
-  const expenseMap = {};
-  const purchaseMap = {};
-  expenseRows.forEach(function buildMap(row) {
-    expenseMap[row.expense_date] = money(row.total);
-  });
-  purchaseRows.forEach(function buildPurchaseMap(row) {
-    purchaseMap[row.purchase_date] = money(row.total);
-  });
-
-  const days = ledgerRows.map(function mapDay(row) {
-    const expenseTotal = money(expenseMap[row.ledger_date] || 0);
-    const purchaseTotal = money(purchaseMap[row.ledger_date] || 0);
-    const salesTotal = money(row.sales_total);
-    const profitMetrics = buildPeriodProfitMetrics(api, salesTotal, purchaseTotal, expenseTotal, row.ledger_date, row.ledger_date, normalizedStoreName);
-    return {
-      date: row.ledger_date,
-      storeName: normalizedStoreName || "All Stores",
-      salesTotal: salesTotal,
-      actualReceived: money(row.actual_received),
-      memberCardAmount: money(row.member_card_amount),
-      expenseTotal: expenseTotal,
-      purchaseTotal: purchaseTotal,
-      costOfGoodsSold: profitMetrics.costOfGoodsSold,
-      openingInventoryAmount: profitMetrics.openingInventoryAmount,
-      endingInventoryAmount: profitMetrics.endingInventoryAmount,
-      grossProfit: profitMetrics.grossProfit,
-      actualProfit: profitMetrics.actualProfit,
-      profit: profitMetrics.actualProfit
-    };
-  });
-
-  const totals = days.reduce(
-    function reduceTotal(acc, day) {
-      acc.salesTotal += day.salesTotal;
-      acc.actualReceived += day.actualReceived;
-      acc.memberCardAmount += day.memberCardAmount;
-      acc.expenseTotal += day.expenseTotal;
-      acc.purchaseTotal += day.purchaseTotal;
-      acc.grossProfit += day.grossProfit;
-      acc.actualProfit += day.actualProfit;
-      return acc;
-    },
-    { salesTotal: 0, actualReceived: 0, memberCardAmount: 0, expenseTotal: 0, purchaseTotal: 0, grossProfit: 0, actualProfit: 0 }
-  );
+  const monthlyProfitSummary = summarizeMonthlyProfit(api, month, normalizedStoreName);
   const monthlyPurchases = getMonthlyPurchaseEntries(api, month, normalizedStoreName);
   const purchaseSummary = getMonthlyPurchaseSummary(api, month, normalizedStoreName);
   const purchaseProductSummary = getMonthlyPurchaseProductSummary(api, month, normalizedStoreName);
   const purchaseDailySummary = getMonthlyPurchaseDailySummary(api, month, normalizedStoreName);
-  const periodProfitMetrics = buildPeriodProfitMetrics(
-    api,
-    totals.salesTotal,
-    totals.purchaseTotal,
-    totals.expenseTotal,
-    fromDate,
-    toDate,
-    normalizedStoreName
-  );
 
   return {
     month: month,
-    totals: {
-      salesTotal: money(totals.salesTotal),
-      actualReceived: money(totals.actualReceived),
-      memberCardAmount: money(totals.memberCardAmount),
-      expenseTotal: money(totals.expenseTotal),
-      purchaseTotal: money(totals.purchaseTotal),
-      openingInventoryAmount: periodProfitMetrics.openingInventoryAmount,
-      endingInventoryAmount: periodProfitMetrics.endingInventoryAmount,
-      costOfGoodsSold: periodProfitMetrics.costOfGoodsSold,
-      grossProfit: periodProfitMetrics.grossProfit,
-      actualProfit: periodProfitMetrics.actualProfit,
-      profit: periodProfitMetrics.actualProfit
-    },
-    days: days,
+    monthEndDate: monthlyProfitSummary.monthEndDate,
+    profitFinalized: monthlyProfitSummary.profitFinalized,
+    salesDays: monthlyProfitSummary.salesDays,
+    totals: monthlyProfitSummary.totals,
+    days: monthlyProfitSummary.days,
     purchases: monthlyPurchases,
     purchaseSummary: purchaseSummary,
     purchaseProductSummary: purchaseProductSummary,
@@ -2359,6 +2506,9 @@ function createApp(api) {
         actualReceived = salesTotal;
       }
     }
+    const inventoryAmount = isMonthEndDate(date)
+      ? money(body.inventoryAmount)
+      : money(current.inventory_amount);
     api.run(
       "UPDATE daily_ledgers SET sales_total = ?, actual_received = ?, cash_amount = ?, wechat_amount = ?, alipay_amount = ?, member_card_amount = ?, refund_amount = ?, rounding_amount = ?, inventory_amount = ?, note = ?, updated_by = ?, updated_at = ? WHERE id = ?",
       [
@@ -2370,7 +2520,7 @@ function createApp(api) {
         money(body.memberCardAmount),
         refundAmount,
         roundingAmount,
-        money(body.inventoryAmount),
+        inventoryAmount,
         String(body.note || ""),
         req.user.id,
         now,

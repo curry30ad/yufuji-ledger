@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>于福记熟食店记账系统</title>
-    <link rel="stylesheet" href="/styles.css?v=20260628-3">
+    <link rel="stylesheet" href="/styles.css?v=20260701-1">
 </head>
 <body>
   <div id="app">
@@ -196,7 +196,7 @@
                 <label><span>会员卡收入</span><input name="memberCardAmount" type="number" step="0.01"></label>
                 <label><span>退款</span><input name="refundAmount" type="number" step="0.01"></label>
                 <label><span>抹零</span><input name="roundingAmount" type="number" step="0.01"></label>
-                <label><span>期末剩余库存进货金额</span><input name="inventoryAmount" type="number" step="0.01" min="0" placeholder="还压在店里的进货成本"></label>
+                <label><span>期末剩余库存进货金额</span><input name="inventoryAmount" type="number" step="0.01" min="0" placeholder="月底盘库时再填写"><small id="inventoryAmountHint" class="muted">仅在月底盘库日填写，平时会沿用上一次月底库存。</small></label>
                 <label class="full"><span>备注</span><textarea name="note" rows="3" placeholder="例如：午市活动、团购订单"></textarea></label>
                 <div class="full form-actions">
                   <button type="submit" class="primary">保存营业数据</button>
@@ -478,6 +478,6 @@
     </section>
   </div>
 
-    <script src="/app.js?v=20260628-3"></script>
+    <script src="/app.js?v=20260701-2"></script>
 </body>
 </html>

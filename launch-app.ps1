@@ -1,3 +1,8 @@
+$ForceRestart = $false
+if ($args -contains "-ForceRestart") {
+  $ForceRestart = $true
+}
+
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serverJs = Join-Path $projectRoot "server.js"
 $logOut = Join-Path $projectRoot "server.log"
@@ -34,6 +39,11 @@ function Stop-AppProcesses {
       } catch {
       }
     }
+}
+
+if ($ForceRestart) {
+  Stop-AppProcesses
+  Start-Sleep -Milliseconds 800
 }
 
 if ((Test-AppHealth) -and (-not (Test-AppCompatibility))) {

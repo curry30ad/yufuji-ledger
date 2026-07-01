@@ -66,6 +66,10 @@ npm start
 http://127.0.0.1:3000
 ```
 
+如果只是打开页面，可双击 `launch-app.cmd`。
+
+如果已经改过代码，想强制重启本地服务再打开页面，请双击 `restart-ledger-service.cmd`。
+
 ## 默认账号
 
 - 店主：`owner / admin123`
