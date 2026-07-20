@@ -2707,6 +2707,35 @@ async function bootstrap() {
   bindById("exportMonthlyBtn", "click", function () {
     downloadFile(appendStoreQuery("/api/export/monthly?month=" + byId("activeMonth").value), "月报-" + byId("activeMonth").value + ".xlsx");
   });
+  bindById("importMonthlyBtn", "click", function () {
+    byId("monthlyImportFile").click();
+  });
+  bindById("monthlyImportFile", "change", async function (event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) {
+      return;
+    }
+    try {
+      const formData = new FormData();
+      formData.append("reportFile", file);
+      const response = await fetch("/api/import/monthly", {
+        method: "POST",
+        headers: state.token ? { Authorization: "Bearer " + state.token } : {},
+        body: formData
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Monthly report import failed.");
+      }
+      byId("activeMonth").value = payload.months[0] || byId("activeMonth").value;
+      await loadDashboardData();
+      showMessage("月报已导入，共 " + payload.importedRows + " 天记录。");
+    } catch (error) {
+      showMessage(error.message);
+    } finally {
+      event.target.value = "";
+    }
+  });
 
   document.body.addEventListener("click", function (event) {
     handleBodyClick(event).catch(function (error) {

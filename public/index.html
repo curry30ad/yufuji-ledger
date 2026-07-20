@@ -41,10 +41,6 @@
             </label>
             <button type="submit" class="primary">登录系统</button>
           </form>
-          <div class="tip-box">
-            <div>管理员账号：<strong>owner / admin123</strong></div>
-            <div>示例店员账号：<strong>store1 / 123456</strong></div>
-          </div>
           <p id="loginError" class="error-text"></p>
         </div>
       </div>
@@ -359,7 +355,11 @@
             <article class="panel">
               <div class="panel-head">
                 <h3>月报</h3>
-                <button id="exportMonthlyBtn" class="ghost">导出月报 Excel</button>
+                <div class="form-actions">
+                  <input id="monthlyImportFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
+                  <button id="importMonthlyBtn" type="button" class="ghost">导入月报 Excel</button>
+                  <button id="exportMonthlyBtn" class="ghost">导出月报 Excel</button>
+                </div>
               </div>
               <div id="monthlyReport"></div>
             </article>

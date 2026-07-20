@@ -22,6 +22,7 @@ const sessionStore = new Map();
 const DEFAULT_STORE_NAME = "\u4e8e\u798f\u8bb0\u719f\u98df\u5e97";
 const STORE_NAME = "\u4e8e\u798f\u8bb0\u719f\u98df\u5e97";
 const OWNER_DISPLAY_NAME = "\u4e8e\u798f\u8bb0";
+const MONTHLY_IMPORT_NOTE_PREFIX = "[monthly-report-import]";
 const LEGACY_STORE_NAME_MAPPINGS = [
   { from: "é»è®¤é¨åº", to: DEFAULT_STORE_NAME },
   { from: "????", to: DEFAULT_STORE_NAME },
@@ -2200,6 +2201,108 @@ function getAnalyticsOverview(api, options) {
   };
 }
 
+function monthlyImportMoney(value) {
+  const text = String(value == null ? "" : value).replace(/,/g, "").trim();
+  const amount = Number(text || 0);
+  return Number.isFinite(amount) ? Number(amount.toFixed(2)) : 0;
+}
+
+function normalizeMonthlyImportDate(value) {
+  const text = String(value == null ? "" : value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text;
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
+}
+
+function readMonthlyImportRows(filePath) {
+  const workbook = XLSX.readFile(filePath, { cellDates: true });
+  const sheetName = workbook.SheetNames[1] || workbook.SheetNames[0];
+  if (!sheetName || !workbook.Sheets[sheetName]) {
+    throw new Error("The selected workbook has no readable sheet.");
+  }
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+    header: 1,
+    defval: "",
+    raw: false,
+    dateNF: "yyyy-mm-dd"
+  });
+  const imported = [];
+  for (let index = 1; index < rows.length; index += 1) {
+    const row = rows[index];
+    const date = normalizeMonthlyImportDate(row[0]);
+    if (!date) {
+      continue;
+    }
+    imported.push({
+      date: date,
+      storeName: normalizeStoreName(row[1]),
+      salesTotal: monthlyImportMoney(row[2]),
+      actualReceived: monthlyImportMoney(row[3]),
+      expenseTotal: monthlyImportMoney(row[4])
+    });
+  }
+  if (!imported.length) {
+    throw new Error("No daily rows were found in this monthly report.");
+  }
+  return imported;
+}
+
+function importMonthlyReportRows(api, rows, userId) {
+  const now = new Date().toISOString();
+  const seen = new Set();
+  rows.forEach(function checkDuplicate(row) {
+    const key = row.date + "::" + row.storeName;
+    if (seen.has(key)) {
+      throw new Error("The monthly report contains duplicate dates for the same store.");
+    }
+    seen.add(key);
+    const existing = api.one(
+      "SELECT note FROM daily_ledgers WHERE ledger_date = ? AND store_name = ? LIMIT 1",
+      [row.date, row.storeName]
+    );
+    if (existing && !String(existing.note || "").startsWith(MONTHLY_IMPORT_NOTE_PREFIX)) {
+      throw new Error("Existing manual entries were found for " + row.date + ". Import was stopped to protect them.");
+    }
+  });
+
+  api.raw.exec("BEGIN TRANSACTION;");
+  try {
+    rows.forEach(function saveRow(row) {
+      api.raw.run(
+        "DELETE FROM daily_ledgers WHERE ledger_date = ? AND store_name = ? AND note LIKE ?",
+        [row.date, row.storeName, MONTHLY_IMPORT_NOTE_PREFIX + "%"]
+      );
+      api.raw.run(
+        "DELETE FROM expense_entries WHERE expense_date = ? AND store_name = ? AND note LIKE ?",
+        [row.date, row.storeName, MONTHLY_IMPORT_NOTE_PREFIX + "%"]
+      );
+      api.raw.run(
+        "INSERT INTO daily_ledgers (ledger_date, store_name, sales_total, actual_received, cash_amount, wechat_amount, alipay_amount, member_card_amount, refund_amount, rounding_amount, note, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?)",
+        [row.date, row.storeName, row.salesTotal, row.actualReceived, MONTHLY_IMPORT_NOTE_PREFIX, userId, userId, now, now]
+      );
+      if (row.expenseTotal > 0) {
+        api.raw.run(
+          "INSERT INTO expense_entries (expense_date, store_name, expense_type, amount, note, created_by, created_at, updated_at) VALUES (?, ?, 'other_daily', ?, ?, ?, ?, ?)",
+          [row.date, row.storeName, row.expenseTotal, MONTHLY_IMPORT_NOTE_PREFIX + " expense", userId, now, now]
+        );
+      }
+    });
+    api.raw.exec("COMMIT;");
+    api.run("UPDATE users SET created_at = created_at WHERE id = ?", [userId]);
+  } catch (error) {
+    api.raw.exec("ROLLBACK;");
+    throw error;
+  }
+
+  return {
+    importedRows: rows.length,
+    months: Array.from(new Set(rows.map(function mapMonth(row) { return row.date.slice(0, 7); }))),
+    stores: Array.from(new Set(rows.map(function mapStore(row) { return row.storeName; })))
+  };
+}
+
 function createApp(api) {
   const app = express();
   ensureDir(UPLOAD_DIR);
@@ -2248,6 +2351,24 @@ function createApp(api) {
 
   app.get("/api/auth/me", function me(req, res) {
     res.json({ user: req.user });
+  });
+
+  app.post("/api/import/monthly", upload.single("reportFile"), function importMonthlyReport(req, res) {
+    if (!requireOwner(req, res)) {
+      return;
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: "Please select a monthly report Excel file." });
+    }
+    try {
+      const rows = readMonthlyImportRows(req.file.path);
+      const result = importMonthlyReportRows(api, rows, req.user.id);
+      res.json(Object.assign({ success: true }, result));
+    } catch (error) {
+      res.status(400).json({ error: error && error.message ? error.message : "Monthly report import failed." });
+    } finally {
+      fs.unlink(req.file.path, function ignoreCleanupError() {});
+    }
   });
 
   app.get("/api/users", function users(req, res) {
