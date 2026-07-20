@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "smoke": "node scripts/smoke-test.js",
-    "test:full": "node scripts/full-test-no-ocr.js"
+    "test:full": "node scripts/full-test-no-ocr.js",
+    "test:monthly-import": "node scripts/monthly-import-test.js"
   },
   "keywords": [
     "ledger",
